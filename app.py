@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
 import re
@@ -16,15 +14,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# FIXED CSS - only hide edit button, NOT sidebar
+# MINIMAL CSS - ONLY hides deploy button, nothing else
 st.markdown("""
 <style>
+    .stDeployButton { display: none !important; }
     .stMetric > div { background-color: #f8f9fa; border-radius: 8px; padding: 10px; }
     div[data-testid="stMetricValue"] { font-size: 24px; }
-    .block-container { padding-top: 1rem; }
-    [data-testid="stToolbar"] { display: none !important; }
-    .stDeployButton { display: none !important; }
-    footer { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -80,7 +75,7 @@ def extract_budget_from_name(order_name):
     return 0
 
 
-def process_entity_order_summary(df, today):
+def process_data(df, today):
     df = df.copy()
     df = df.dropna(how='all')
 
@@ -128,7 +123,7 @@ def process_entity_order_summary(df, today):
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
 
     if 'Order Name' not in df.columns:
-        st.error("Could not find 'Campaign name' column. Please check file format.")
+        st.error("Could not find 'Campaign name' column.")
         return pd.DataFrame()
 
     df = df.dropna(subset=['Order Name'])
@@ -191,68 +186,43 @@ def process_entity_order_summary(df, today):
 
 
 # ═══════════════════════════════════════════════════════════════
-# PERFORMANCE COLOR CODING (using HTML for reliability)
+# PERFORMANCE BADGE FUNCTIONS
 # ═══════════════════════════════════════════════════════════════
 STATUS_ICONS = {
-    'On Track': '🟢',
-    'Under-delivering': '🟡',
-    'Over-delivering': '🔵',
-    'Not Spending': '🔴',
-    'No Budget': '⚪',
-    'Inactive': '⚪',
-    'Ended': '⏹️'
+    'On Track': '🟢', 'Under-delivering': '🟡', 'Over-delivering': '🔵',
+    'Not Spending': '🔴', 'No Budget': '⚪', 'Inactive': '⚪', 'Ended': '⏹️'
 }
 
-
-def get_ctr_badge(val):
+def badge_ctr(val):
     try:
         v = float(val)
-        if v > 0.006:
-            return f'🟢 {v:.4f}'
-        elif v >= 0.004:
-            return f'🟡 {v:.4f}'
-        else:
-            return f'🔴 {v:.4f}'
-    except:
-        return str(val)
+        if v > 0.006: return f'🟢 {v:.4f}'
+        elif v >= 0.004: return f'🟡 {v:.4f}'
+        else: return f'🔴 {v:.4f}'
+    except: return str(val)
 
-
-def get_dpvr_badge(dpvr_val, ctr_val):
+def badge_dpvr(dpvr, ctr):
     try:
-        d = float(dpvr_val)
-        c = float(ctr_val)
-        if d > c:
-            return f'🟢 {d:.4f}'
-        else:
-            return f'🔴 {d:.4f}'
-    except:
-        return str(dpvr_val)
+        d, c = float(dpvr), float(ctr)
+        if d > c: return f'🟢 {d:.4f}'
+        else: return f'🔴 {d:.4f}'
+    except: return str(dpvr)
 
-
-def get_ntb_badge(val):
+def badge_ntb(val):
     try:
         v = float(val)
-        if v > 0.6:
-            return f'🟢 {v:.1%}'
-        elif v >= 0.4:
-            return f'🟡 {v:.1%}'
-        else:
-            return f'🔴 {v:.1%}'
-    except:
-        return str(val)
+        if v > 0.6: return f'🟢 {v:.1%}'
+        elif v >= 0.4: return f'🟡 {v:.1%}'
+        else: return f'🔴 {v:.1%}'
+    except: return str(val)
 
-
-def get_roas_badge(val):
+def badge_roas(val):
     try:
         v = float(val)
-        if v > 2:
-            return f'🟢 {v:.2f}'
-        elif v >= 1:
-            return f'🟡 {v:.2f}'
-        else:
-            return f'🔴 {v:.2f}'
-    except:
-        return str(val)
+        if v > 2: return f'🟢 {v:.2f}'
+        elif v >= 1: return f'🟡 {v:.2f}'
+        else: return f'🔴 {v:.2f}'
+    except: return str(val)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -265,7 +235,7 @@ if uploaded_file is not None:
     else:
         raw_df = pd.read_excel(uploaded_file)
 
-    df = process_entity_order_summary(raw_df, report_date)
+    df = process_data(raw_df, report_date)
 
     if len(df) == 0:
         st.error("No data processed. Check file format.")
@@ -284,11 +254,6 @@ if uploaded_file is not None:
     inactive_combined = inactive_count + line_not_running
 
     status_counts = active_df['Status'].value_counts()
-    on_track_count = status_counts.get('On Track', 0)
-    under_count = status_counts.get('Under-delivering', 0)
-    over_count = status_counts.get('Over-delivering', 0)
-    not_spending_count = status_counts.get('Not Spending', 0)
-
     total_budget = active_df[active_df['Budget'] > 0]['Budget'].sum()
     total_spend = active_df['Total Spend'].sum()
     total_ideal = active_df[active_df['Budget'] > 0]['Ideal Spend'].sum()
@@ -306,20 +271,16 @@ if uploaded_file is not None:
         acct_agg['Pacing %'] = np.where(acct_agg['Ideal Spend'] > 0, (acct_agg['Total Spend'] / acct_agg['Ideal Spend']) * 100, 0)
         acct_under = len(acct_agg[acct_agg['Pacing %'] < under_threshold])
         acct_over = len(acct_agg[acct_agg['Pacing %'] > over_threshold])
-        acct_on_track = len(acct_agg[(acct_agg['Pacing %'] >= under_threshold) & (acct_agg['Pacing %'] <= over_threshold)])
+        acct_on_track = len(acct_agg) - acct_under - acct_over
     else:
         acct_under = acct_over = acct_on_track = 0
 
-    # ═══════════════════════════════════════════════════════════
-    # HEADER
     # ═══════════════════════════════════════════════════════════
     st.title("📊 CEPC DSP Delivery Tracker")
     st.caption(f"📅 {report_date.strftime('%d %B %Y')} | Total Orders: {len(df)}")
     st.markdown("---")
 
-    # ═══════════════════════════════════════════════════════════
     # ACCOUNT LEVEL SUMMARY
-    # ═══════════════════════════════════════════════════════════
     st.subheader("🏢 Account Level Summary")
     a1, a2, a3, a4, a5, a6, a7 = st.columns(7)
     a1.metric("Total Accounts", total_accounts)
@@ -332,76 +293,56 @@ if uploaded_file is not None:
 
     st.markdown("---")
 
-    # ═══════════════════════════════════════════════════════════
     # ORDER LEVEL SUMMARY
-    # ═══════════════════════════════════════════════════════════
     st.subheader("📋 Order Level Summary")
     o1, o2, o3, o4, o5, o6, o7 = st.columns(7)
     o1.metric("Total Orders", len(df))
     o2.metric("🟢 Active Orders", delivering_count)
     o3.metric("⚪ Inactive/Not Running", inactive_combined)
-    o4.metric("🟢 On Track", on_track_count)
-    o5.metric("🟡 Under-delivering", under_count)
-    o6.metric("🔵 Over-delivering", over_count)
+    o4.metric("🟢 On Track", status_counts.get('On Track', 0))
+    o5.metric("🟡 Under-delivering", status_counts.get('Under-delivering', 0))
+    o6.metric("🔵 Over-delivering", status_counts.get('Over-delivering', 0))
     o7.metric("⚠️ Budget at Risk", f"₹{budget_at_risk/100000:.1f}L")
 
     st.markdown("---")
 
-    # ═══════════════════════════════════════════════════════════
-    # ACCOUNT-LEVEL OVERVIEW (TABLE ONLY)
-    # ═══════════════════════════════════════════════════════════
+    # ACCOUNT-LEVEL OVERVIEW
     st.header("🏢 Account-Level Overview")
 
     if len(acct_df) > 0:
         account_summary = acct_df.groupby('Account Short').agg({
-            'Budget': 'sum',
-            'Total Spend': 'sum',
-            'Ideal Spend': 'sum',
-            'Elapsed Days': 'mean',
-            'Total Days': 'mean',
-            'CTR': 'mean',
-            'DPVR': 'mean',
-            'ROAS': 'mean',
+            'Budget': 'sum', 'Total Spend': 'sum', 'Ideal Spend': 'sum',
+            'Elapsed Days': 'mean', 'Total Days': 'mean',
+            'CTR': 'mean', 'DPVR': 'mean', 'ROAS': 'mean',
             'Order Name': 'count'
         }).reset_index()
 
         account_summary.columns = ['Account', 'Budget', 'Spends', 'Ideal Spend',
-                                    'Avg Elapsed', 'Avg Total Days',
-                                    'CTR', 'DPVR', 'ROAS', 'Orders']
+                                    'Avg Elapsed', 'Avg Total Days', 'CTR', 'DPVR', 'ROAS', 'Orders']
 
         account_summary['DR %'] = round((account_summary['Spends'] / account_summary['Budget']) * 100, 1)
         account_summary['Expected DR %'] = round((account_summary['Avg Elapsed'] / account_summary['Avg Total Days']) * 100, 1)
         account_summary['Pacing %'] = np.where(
             account_summary['Ideal Spend'] > 0,
-            round((account_summary['Spends'] / account_summary['Ideal Spend']) * 100, 1), 0
-        )
+            round((account_summary['Spends'] / account_summary['Ideal Spend']) * 100, 1), 0)
 
         def acct_status(row):
-            if row['Pacing %'] < under_threshold:
-                return 'Under-delivering'
-            elif row['Pacing %'] > over_threshold:
-                return 'Over-delivering'
-            else:
-                return 'On Track'
+            if row['Pacing %'] < under_threshold: return 'Under-delivering'
+            elif row['Pacing %'] > over_threshold: return 'Over-delivering'
+            else: return 'On Track'
 
         account_summary['Status'] = account_summary.apply(acct_status, axis=1)
         account_summary = account_summary.sort_values('Pacing %', ascending=True)
 
         st.caption(f"{len(account_summary)} Accounts")
-
         acct_display = account_summary[['Account', 'Budget', 'Spends', 'DR %', 'Expected DR %', 'Pacing %', 'CTR', 'DPVR', 'ROAS', 'Orders', 'Status']].copy()
         acct_display['Status'] = acct_display['Status'].map(lambda x: f"{STATUS_ICONS.get(x, '')} {x}")
 
         st.dataframe(
             acct_display.style.format({
-                'Budget': '₹{:,.0f}',
-                'Spends': '₹{:,.0f}',
-                'DR %': '{:.1f}%',
-                'Expected DR %': '{:.1f}%',
-                'Pacing %': '{:.1f}%',
-                'CTR': '{:.4f}',
-                'DPVR': '{:.4f}',
-                'ROAS': '{:.2f}'
+                'Budget': '₹{:,.0f}', 'Spends': '₹{:,.0f}',
+                'DR %': '{:.1f}%', 'Expected DR %': '{:.1f}%', 'Pacing %': '{:.1f}%',
+                'CTR': '{:.4f}', 'DPVR': '{:.4f}', 'ROAS': '{:.2f}'
             }),
             use_container_width=True,
             height=min(600, max(250, len(account_summary) * 38))
@@ -409,18 +350,14 @@ if uploaded_file is not None:
 
     st.markdown("---")
 
-    # ═══════════════════════════════════════════════════════════
     # ORDER-LEVEL DELIVERY TRACKER
-    # ═══════════════════════════════════════════════════════════
     st.header("📋 Order-Level Delivery Tracker")
 
     fcol1, fcol2, fcol3 = st.columns([2, 2, 1])
     with fcol1:
-        all_accounts = sorted(active_df['Account Short'].unique())
-        acct_filter = st.multiselect("Filter by Account", options=all_accounts, default=[])
+        acct_filter = st.multiselect("Filter by Account", options=sorted(active_df['Account Short'].unique()), default=[])
     with fcol2:
-        all_statuses = active_df['Status'].unique().tolist()
-        status_filter = st.multiselect("Filter by Status", options=all_statuses, default=all_statuses)
+        status_filter = st.multiselect("Filter by Status", options=active_df['Status'].unique().tolist(), default=active_df['Status'].unique().tolist())
     with fcol3:
         pacing_range = st.slider("Pacing %", 0, 200, (0, 200))
 
@@ -444,125 +381,94 @@ if uploaded_file is not None:
         'DPVR': filtered_df['DPVR'].values,
         'ROAS': filtered_df['ROAS'].values,
         'Status': [f"{STATUS_ICONS.get(s, '')} {s}" for s in filtered_df['Status'].values]
-    })
-    order_display = order_display.sort_values('Pacing %', ascending=True)
+    }).sort_values('Pacing %', ascending=True)
 
     st.dataframe(
         order_display.style.format({
-            'Budget': '₹{:,.0f}',
-            'Spends': '₹{:,.0f}',
-            'DR %': '{:.1f}%',
-            'Expected DR %': '{:.1f}%',
-            'Pacing %': '{:.1f}%',
-            'CTR': '{:.4f}',
-            'DPVR': '{:.4f}',
-            'ROAS': '{:.2f}'
+            'Budget': '₹{:,.0f}', 'Spends': '₹{:,.0f}',
+            'DR %': '{:.1f}%', 'Expected DR %': '{:.1f}%', 'Pacing %': '{:.1f}%',
+            'CTR': '{:.4f}', 'DPVR': '{:.4f}', 'ROAS': '{:.2f}'
         }),
-        use_container_width=True,
-        height=600
+        use_container_width=True, height=600
     )
 
     st.markdown("---")
 
-    # ═══════════════════════════════════════════════════════════
-    # PERFORMANCE METRICS (EMOJI BADGES - NO applymap needed)
-    # ═══════════════════════════════════════════════════════════
+    # PERFORMANCE METRICS
     st.header("📈 Performance Metrics")
     st.caption("🟢 Good | 🟡 Average | 🔴 Poor")
 
     perf_view = st.radio("View by:", ["Account Level", "Order Level"], horizontal=True)
 
     if perf_view == "Account Level":
-        perf_source = active_df[active_df['Budget'] > 0].copy()
+        perf_source = active_df[active_df['Budget'] > 0]
         if len(perf_source) > 0:
             perf_agg = perf_source.groupby('Account Short').agg({
-                'CTR': 'mean',
-                'DPVR': 'mean',
-                'NTB': 'mean',
-                'ROAS': 'mean',
-                'Total Spend': 'sum',
-                'Order Name': 'count'
+                'CTR': 'mean', 'DPVR': 'mean', 'NTB': 'mean',
+                'ROAS': 'mean', 'Total Spend': 'sum', 'Order Name': 'count'
             }).reset_index()
             perf_agg.columns = ['Account', 'CTR', 'DPVR', 'NTB', 'ROAS', 'Spend', 'Orders']
-            perf_agg = perf_agg.sort_values('Spend', ascending=False).reset_index(drop=True)
+            perf_agg = perf_agg.sort_values('Spend', ascending=False)
 
-            # Create color-coded display using emoji badges
             perf_display = pd.DataFrame({
-                'Account': perf_agg['Account'],
-                'CTR': [get_ctr_badge(v) for v in perf_agg['CTR']],
-                'DPVR': [get_dpvr_badge(d, c) for d, c in zip(perf_agg['DPVR'], perf_agg['CTR'])],
-                'NTB': [get_ntb_badge(v) for v in perf_agg['NTB']],
-                'ROAS': [get_roas_badge(v) for v in perf_agg['ROAS']],
-                'Spend': [f"₹{v:,.0f}" for v in perf_agg['Spend']],
-                'Orders': perf_agg['Orders']
+                'Account': perf_agg['Account'].values,
+                'CTR': [badge_ctr(v) for v in perf_agg['CTR'].values],
+                'DPVR': [badge_dpvr(d, c) for d, c in zip(perf_agg['DPVR'].values, perf_agg['CTR'].values)],
+                'NTB': [badge_ntb(v) for v in perf_agg['NTB'].values],
+                'ROAS': [badge_roas(v) for v in perf_agg['ROAS'].values],
+                'Spend': [f"₹{v:,.0f}" for v in perf_agg['Spend'].values],
+                'Orders': perf_agg['Orders'].values
             })
-
             st.dataframe(perf_display, use_container_width=True, height=min(600, max(250, len(perf_display) * 38)))
 
     else:
-        perf_acct_filter = st.selectbox("Select Account", options=["All"] + sorted(active_df['Account Short'].unique().tolist()))
-
+        perf_acct = st.selectbox("Select Account", options=["All"] + sorted(active_df['Account Short'].unique().tolist()))
         perf_orders = active_df[active_df['Budget'] > 0].copy()
-        if perf_acct_filter != "All":
-            perf_orders = perf_orders[perf_orders['Account Short'] == perf_acct_filter]
+        if perf_acct != "All":
+            perf_orders = perf_orders[perf_orders['Account Short'] == perf_acct]
 
         if len(perf_orders) > 0:
-            perf_order_display = pd.DataFrame({
+            perf_ord_display = pd.DataFrame({
                 'Account': perf_orders['Account Short'].values,
                 'Order Name': perf_orders['Order Name'].str[:55].values,
-                'CTR': [get_ctr_badge(v) for v in perf_orders['CTR'].values],
-                'DPVR': [get_dpvr_badge(d, c) for d, c in zip(perf_orders['DPVR'].values, perf_orders['CTR'].values)],
-                'NTB': [get_ntb_badge(v) for v in perf_orders['NTB'].values],
-                'ROAS': [get_roas_badge(v) for v in perf_orders['ROAS'].values],
+                'CTR': [badge_ctr(v) for v in perf_orders['CTR'].values],
+                'DPVR': [badge_dpvr(d, c) for d, c in zip(perf_orders['DPVR'].values, perf_orders['CTR'].values)],
+                'NTB': [badge_ntb(v) for v in perf_orders['NTB'].values],
+                'ROAS': [badge_roas(v) for v in perf_orders['ROAS'].values],
                 'Spend': [f"₹{v:,.0f}" for v in perf_orders['Total Spend'].values]
             })
+            st.dataframe(perf_ord_display, use_container_width=True, height=min(600, max(250, len(perf_ord_display) * 38)))
 
-            st.dataframe(perf_order_display, use_container_width=True, height=min(600, max(250, len(perf_order_display) * 38)))
-
-    # Legend
     st.markdown("---")
-    leg1, leg2, leg3, leg4 = st.columns(4)
-    with leg1:
-        st.markdown("**CTR**\n- 🟢 > 0.6%\n- 🟡 0.4-0.6%\n- 🔴 < 0.4%")
-    with leg2:
-        st.markdown("**DPVR**\n- 🟢 > CTR\n- 🔴 < CTR")
-    with leg3:
-        st.markdown("**NTB**\n- 🟢 > 60%\n- 🟡 40-60%\n- 🔴 < 40%")
-    with leg4:
-        st.markdown("**ROAS**\n- 🟢 > 2\n- 🟡 1-2\n- 🔴 < 1")
+    l1, l2, l3, l4 = st.columns(4)
+    l1.markdown("**CTR**\n- 🟢 > 0.6%\n- 🟡 0.4-0.6%\n- 🔴 < 0.4%")
+    l2.markdown("**DPVR**\n- 🟢 > CTR\n- 🔴 < CTR")
+    l3.markdown("**NTB**\n- 🟢 > 60%\n- 🟡 40-60%\n- 🔴 < 40%")
+    l4.markdown("**ROAS**\n- 🟢 > 2\n- 🟡 1-2\n- 🔴 < 1")
 
     st.markdown("---")
 
-    # ═══════════════════════════════════════════════════════════
     # DOWNLOAD
-    # ═══════════════════════════════════════════════════════════
     st.header("📥 Download")
     dl1, dl2 = st.columns(2)
     with dl1:
-        st.download_button(
-            "⬇️ Order Tracker (CSV)",
-            active_df.to_csv(index=False),
-            f"order_tracker_{report_date.strftime('%Y%m%d')}.csv",
-            "text/csv"
-        )
+        st.download_button("⬇️ Order Tracker (CSV)", active_df.to_csv(index=False),
+                           f"order_tracker_{report_date.strftime('%Y%m%d')}.csv", "text/csv")
     with dl2:
         if len(acct_df) > 0:
-            st.download_button(
-                "⬇️ Account Summary (CSV)",
-                account_summary.to_csv(index=False),
-                f"account_summary_{report_date.strftime('%Y%m%d')}.csv",
-                "text/csv"
-            )
+            st.download_button("⬇️ Account Summary (CSV)", account_summary.to_csv(index=False),
+                               f"account_summary_{report_date.strftime('%Y%m%d')}.csv", "text/csv")
 
 else:
     st.title("📊 CEPC DSP Delivery Tracker")
     st.markdown("### Upload your Entity Order Summary to get started")
     st.markdown("---")
+    st.info("👈 Upload your file in the **sidebar** to begin! Click the **>** arrow at top-left if sidebar is hidden.")
     st.markdown("""
     ## 📁 How to Use
     1. Download **Entity Order Summary** from DSP Console
     2. Upload CSV/Excel in the sidebar ←
-    3. View delivery tracker with pacing & performance metrics
+    3. View delivery tracker with pacing & performance
 
     ---
     ## 🚦 Status Definitions
@@ -582,4 +488,3 @@ else:
     | NTB | > 60% | 40-60% | < 40% |
     | ROAS | > 2 | 1-2 | < 1 |
     """)
-    st.info("👈 Upload your file in the sidebar to begin!")
