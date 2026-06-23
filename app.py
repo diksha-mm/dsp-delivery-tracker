@@ -30,10 +30,9 @@ with st.sidebar:
     st.caption("CEPC Team Dashboard")
     st.markdown("---")
 
-    # File Upload
     st.subheader("📁 Upload Entity Order Summary")
     uploaded_file = st.file_uploader(
-        "Upload Order-Level Export (CSV/Excel)",
+        "Upload Order Level Export (CSV/Excel)",
         type=['csv', 'xlsx', 'xls'],
         help="Upload your Entity Order Summary from DSP Console"
     )
@@ -58,10 +57,9 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════
 
 def process_entity_order_summary(df, today):
-    """Process the Entity Order Summary file"""
     df = df.copy()
 
-    # Standardize column names (handle variations)
+    # Standardize column names
     col_map = {}
     for col in df.columns:
         cl = col.lower().strip()
@@ -85,7 +83,7 @@ def process_entity_order_summary(df, today):
             col_map[col] = 'Clicks'
         elif cl == 'ctr':
             col_map[col] = 'CTR'
-        elif 'total roas' == cl or cl == 'total roas':
+        elif cl == 'total roas':
             col_map[col] = 'ROAS'
         elif 'total dpvr' in cl:
             col_map[col] = 'DPVR'
@@ -100,6 +98,9 @@ def process_entity_order_summary(df, today):
 
     df = df.rename(columns=col_map)
 
+    # Remove duplicate columns if any
+    df = df.loc[:, ~df.columns.duplicated()]
+
     # Clean data
     df = df.dropna(subset=['Order Name'])
     df = df[df['Order Name'].str.strip() != '']
@@ -110,11 +111,12 @@ def process_entity_order_summary(df, today):
     today = pd.Timestamp(today)
 
     # Convert numeric columns
-    for col in ['Budget', 'Total Spend', 'Impressions', 'Clicks', 'CTR', 'ROAS', 'DPVR', 'Purchases', 'eCPM']:
+    numeric_cols = ['Budget', 'Total Spend', 'Impressions', 'Clicks', 'CTR', 'ROAS', 'DPVR', 'Purchases', 'eCPM']
+    for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # ═══ PACING CALCULATIONS ═══
+    # Pacing calculations
     df['Total Days'] = (df['End Date'] - df['Start Date']).dt.days + 1
     df['Elapsed Days'] = ((today - df['Start Date']).dt.days + 1).clip(lower=0)
     df['Elapsed Days'] = df[['Elapsed Days', 'Total Days']].min(axis=1)
@@ -124,52 +126,72 @@ def process_entity_order_summary(df, today):
     df['Ideal Spend'] = df['Daily Budget'] * df['Elapsed Days']
     df['Remaining Budget'] = (df['Budget'] - df['Total Spend']).clip(lower=0)
 
-    # Delivery Rate
     df['DR %'] = np.where(df['Budget'] > 0, (df['Total Spend'] / df['Budget']) * 100, 0)
 
-    # Pacing % (actual vs expected)
     df['Pacing %'] = np.where(
         df['Ideal Spend'] > 0,
         (df['Total Spend'] / df['Ideal Spend']) * 100,
         0
     )
 
-    # Required DRR to finish on time
     df['Required DRR'] = np.where(
         df['Remaining Days'] > 0,
         df['Remaining Budget'] / df['Remaining Days'],
         0
     )
 
-    # Current DRR (based on elapsed performance)
     df['Current DRR'] = np.where(
         df['Elapsed Days'] > 0,
         df['Total Spend'] / df['Elapsed Days'],
         0
     )
 
-    # ═══ STATUS FLAGS ═══
+    # Status flags
     def assign_status(row):
         if row.get('Order Status', '') == 'Ended':
-            return '⏹️ Ended'
+            return 'Ended'
         if row.get('Order Status', '') == 'Inactive':
-            return '⚪ Inactive'
+            return 'Inactive'
         if row.get('Order Status', '') == 'Line items not running':
-            return '🔴 Not Spending'
+            return 'Not Spending'
         if row['Budget'] == 0 or pd.isna(row['Budget']):
-            return '⚪ No Budget'
+            return 'No Budget'
         if row['Total Spend'] == 0 and row['Elapsed Days'] > 3:
-            return '🔴 Not Spending'
+            return 'Not Spending'
         if row['Pacing %'] < under_threshold:
-            return '🟡 Under-delivering'
+            return 'Under-delivering'
         elif row['Pacing %'] > over_threshold:
-            return '🔵 Over-delivering'
+            return 'Over-delivering'
         else:
-            return '🟢 On Track'
+            return 'On Track'
 
     df['Status'] = df.apply(assign_status, axis=1)
 
     return df
+
+
+# ═══════════════════════════════════════════════════════════════
+# COLOR MAP (used across all charts)
+# ═══════════════════════════════════════════════════════════════
+STATUS_COLORS = {
+    'On Track': '#4caf50',
+    'Under-delivering': '#ff9800',
+    'Over-delivering': '#2196f3',
+    'Not Spending': '#f44336',
+    'No Budget': '#9e9e9e',
+    'Inactive': '#9e9e9e',
+    'Ended': '#607d8b'
+}
+
+STATUS_ICONS = {
+    'On Track': '🟢',
+    'Under-delivering': '🟡',
+    'Over-delivering': '🔵',
+    'Not Spending': '🔴',
+    'No Budget': '⚪',
+    'Inactive': '⚪',
+    'Ended': '⏹️'
+}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -186,21 +208,13 @@ if uploaded_file is not None:
     # Process
     df = process_entity_order_summary(raw_df, report_date)
 
-    # ═══ FILTER: Only Delivering / June End Date ═══
+    # Filter active orders
     if show_only_delivering:
         active_df = df[df['Order Status'] == 'Delivering'].copy()
     else:
-        active_df = df[df['Order Status'] != 'Ended'].copy()
+        active_df = df[~df['Status'].isin(['Ended', 'Inactive'])].copy()
 
-    if show_ended_june:
-        june_ended = df[
-            (df['Order Status'] == 'Ended') & 
-            (df['End Date'].dt.month == 6) & 
-            (df['End Date'].dt.year == 2026)
-        ]
-        # Don't add to active_df, show separately
-
-    ended_df = df[df['Order Status'] == 'Ended']
+    ended_df = df[df['Status'] == 'Ended']
 
     # ═══════════════════════════════════════════════════════════
     # HEADER METRICS
@@ -210,33 +224,34 @@ if uploaded_file is not None:
                f"Total Orders: {len(df)} | Active: {len(active_df)} | Ended: {len(ended_df)}")
     st.markdown("---")
 
-    # Status counts for active orders
+    # Status counts
     status_counts = active_df['Status'].value_counts()
 
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     with col1:
         st.metric("📦 Active Orders", len(active_df))
     with col2:
-        st.metric("🟢 On Track", status_counts.get('🟢 On Track', 0))
+        st.metric("🟢 On Track", status_counts.get('On Track', 0))
     with col3:
-        st.metric("🟡 Under", status_counts.get('🟡 Under-delivering', 0))
+        st.metric("🟡 Under", status_counts.get('Under-delivering', 0))
     with col4:
-        st.metric("🔵 Over", status_counts.get('🔵 Over-delivering', 0))
+        st.metric("🔵 Over", status_counts.get('Over-delivering', 0))
     with col5:
-        st.metric("🔴 Not Spending", status_counts.get('🔴 Not Spending', 0))
+        st.metric("🔴 Not Spending", status_counts.get('Not Spending', 0))
     with col6:
-        total_budget = active_df['Budget'].sum()
+        total_budget = active_df[active_df['Budget'] > 0]['Budget'].sum()
         total_spend = active_df['Total Spend'].sum()
-        st.metric("💰 Overall DR%", f"{(total_spend/total_budget*100):.1f}%" if total_budget > 0 else "N/A")
+        overall_dr = (total_spend / total_budget * 100) if total_budget > 0 else 0
+        st.metric("💰 Overall DR%", f"{overall_dr:.1f}%")
 
-    # Budget summary
+    # Budget row
     st.markdown("---")
-    bud_col1, bud_col2, bud_col3 = st.columns(3)
-    with bud_col1:
+    bc1, bc2, bc3 = st.columns(3)
+    with bc1:
         st.metric("💰 Total Active Budget", f"₹{total_budget:,.0f}")
-    with bud_col2:
+    with bc2:
         st.metric("💸 Total Spend", f"₹{total_spend:,.0f}")
-    with bud_col3:
+    with bc3:
         st.metric("📊 Remaining", f"₹{total_budget - total_spend:,.0f}")
 
     st.markdown("---")
@@ -246,80 +261,74 @@ if uploaded_file is not None:
     # ═══════════════════════════════════════════════════════════
     st.header("🏢 Account-Level Overview")
 
-    account_summary = active_df.groupby('Account').agg({
-        'Budget': 'sum',
-        'Total Spend': 'sum',
-        'Ideal Spend': 'sum',
-        'Impressions': 'sum',
-        'Clicks': 'sum',
-        'Purchases': 'sum',
-        'Order Name': 'count'
-    }).reset_index()
+    # Only accounts with budget
+    acct_df = active_df[active_df['Budget'] > 0].copy()
 
-    account_summary.columns = ['Account', 'Budget', 'Spend', 'Ideal Spend', 
-                                'Impressions', 'Clicks', 'Purchases', 'Orders']
+    if len(acct_df) > 0:
+        account_summary = acct_df.groupby('Account').agg({
+            'Budget': 'sum',
+            'Total Spend': 'sum',
+            'Ideal Spend': 'sum',
+            'Impressions': 'sum',
+            'Clicks': 'sum',
+            'Order Name': 'count'
+        }).reset_index()
 
-    account_summary['Pacing %'] = np.where(
-        account_summary['Ideal Spend'] > 0,
-        round((account_summary['Spend'] / account_summary['Ideal Spend']) * 100, 1),
-        0
-    )
-    account_summary['DR %'] = round((account_summary['Spend'] / account_summary['Budget']) * 100, 1)
-    account_summary['ROAS'] = np.where(
-        account_summary['Spend'] > 0,
-        round(account_summary['Purchases'] * 100 / account_summary['Spend'], 2),  # Simplified
-        0
-    )
+        account_summary.columns = ['Account', 'Budget', 'Spend', 'Ideal Spend',
+                                    'Impressions', 'Clicks', 'Orders']
 
-    def acct_status(row):
-        if row['Pacing %'] < under_threshold:
-            return '🟡 Under'
-        elif row['Pacing %'] > over_threshold:
-            return '🔵 Over'
-        else:
-            return '🟢 On Track'
-
-    account_summary['Status'] = account_summary.apply(acct_status, axis=1)
-    account_summary = account_summary.sort_values('Pacing %', ascending=True)
-
-    # Clean account names for display
-    account_summary['Account Short'] = account_summary['Account'].str.replace('IN - GCS - CEPC - ', '', regex=False)
-
-    # Chart
-    fig_accounts = px.bar(
-        account_summary,
-        x='Pacing %',
-        y='Account Short',
-        orientation='h',
-        color='Status',
-        color_discrete_map={
-            '🟢 On Track': '#4caf50',
-            '🟡 Under': '#ff9800',
-            '🔵 Over': '#2196f3'
-        },
-        title="Account Pacing (% of Expected Delivery)",
-        hover_data=['Budget', 'Spend', 'Orders']
-    )
-    fig_accounts.add_vline(x=under_threshold, line_dash="dash", line_color="orange", annotation_text=f"{under_threshold}%")
-    fig_accounts.add_vline(x=over_threshold, line_dash="dash", line_color="blue", annotation_text=f"{over_threshold}%")
-    fig_accounts.update_layout(height=max(400, len(account_summary) * 40), yaxis_title="")
-    st.plotly_chart(fig_accounts, use_container_width=True)
-
-    # Account table
-    with st.expander("📋 Account Details Table", expanded=False):
-        display_acct = account_summary[['Account Short', 'Budget', 'Spend', 'Pacing %', 'DR %', 'Orders', 'Impressions', 'Clicks', 'Status']].copy()
-        st.dataframe(
-            display_acct.style.format({
-                'Budget': '₹{:,.0f}',
-                'Spend': '₹{:,.0f}',
-                'Pacing %': '{:.1f}%',
-                'DR %': '{:.1f}%',
-                'Impressions': '{:,.0f}',
-                'Clicks': '{:,.0f}'
-            }),
-            use_container_width=True,
-            height=400
+        account_summary['Pacing %'] = np.where(
+            account_summary['Ideal Spend'] > 0,
+            round((account_summary['Spend'] / account_summary['Ideal Spend']) * 100, 1),
+            0
         )
+        account_summary['DR %'] = round((account_summary['Spend'] / account_summary['Budget']) * 100, 1)
+
+        def acct_status(row):
+            if row['Pacing %'] < under_threshold:
+                return 'Under-delivering'
+            elif row['Pacing %'] > over_threshold:
+                return 'Over-delivering'
+            else:
+                return 'On Track'
+
+        account_summary['Status'] = account_summary.apply(acct_status, axis=1)
+        account_summary = account_summary.sort_values('Pacing %', ascending=True)
+        account_summary['Account Short'] = account_summary['Account'].str.replace('IN - GCS - CEPC - ', '', regex=False)
+
+        # Chart
+        fig_accounts = px.bar(
+            account_summary,
+            x='Pacing %',
+            y='Account Short',
+            orientation='h',
+            color='Status',
+            color_discrete_map=STATUS_COLORS,
+            title="Account Pacing (% of Expected Delivery)",
+            hover_data=['Budget', 'Spend', 'Orders']
+        )
+        fig_accounts.add_vline(x=under_threshold, line_dash="dash", line_color="orange", annotation_text=f"{under_threshold}%")
+        fig_accounts.add_vline(x=over_threshold, line_dash="dash", line_color="blue", annotation_text=f"{over_threshold}%")
+        fig_accounts.update_layout(height=max(400, len(account_summary) * 40), yaxis_title="")
+        st.plotly_chart(fig_accounts, use_container_width=True)
+
+        # Account table
+        with st.expander("📋 Account Details Table", expanded=False):
+            st.dataframe(
+                account_summary[['Account Short', 'Budget', 'Spend', 'Pacing %', 'DR %', 'Orders', 'Impressions', 'Clicks', 'Status']]
+                .style.format({
+                    'Budget': '₹{:,.0f}',
+                    'Spend': '₹{:,.0f}',
+                    'Pacing %': '{:.1f}%',
+                    'DR %': '{:.1f}%',
+                    'Impressions': '{:,.0f}',
+                    'Clicks': '{:,.0f}'
+                }),
+                use_container_width=True,
+                height=400
+            )
+    else:
+        st.info("No accounts with budget data to display.")
 
     st.markdown("---")
 
@@ -331,34 +340,29 @@ if uploaded_file is not None:
     # Filters
     fcol1, fcol2, fcol3 = st.columns(3)
     with fcol1:
-        acct_filter = st.multiselect(
-            "Filter by Account",
-            options=sorted(active_df['Account'].str.replace('IN - GCS - CEPC - ', '').unique()),
-            default=[]
-        )
+        all_accounts = sorted(active_df['Account'].str.replace('IN - GCS - CEPC - ', '', regex=False).unique())
+        acct_filter = st.multiselect("Filter by Account", options=all_accounts, default=[])
     with fcol2:
-        status_filter = st.multiselect(
-            "Filter by Status",
-            options=active_df['Status'].unique().tolist(),
-            default=active_df['Status'].unique().tolist()
-        )
+        all_statuses = active_df['Status'].unique().tolist()
+        status_filter = st.multiselect("Filter by Status", options=all_statuses, default=all_statuses)
     with fcol3:
         pacing_range = st.slider("Pacing % Range", 0, 200, (0, 200))
 
     # Apply filters
     filtered_df = active_df.copy()
     if acct_filter:
-        filtered_df = filtered_df[filtered_df['Account'].str.replace('IN - GCS - CEPC - ', '').isin(acct_filter)]
+        filtered_df = filtered_df[filtered_df['Account'].str.replace('IN - GCS - CEPC - ', '', regex=False).isin(acct_filter)]
     filtered_df = filtered_df[
         (filtered_df['Status'].isin(status_filter)) &
         (filtered_df['Pacing %'].between(pacing_range[0], pacing_range[1]))
     ]
 
-    # Display columns
+    # Add status icon for display
+    filtered_df['Status Display'] = filtered_df['Status'].map(lambda x: f"{STATUS_ICONS.get(x, '')} {x}")
+
     display_cols = ['Order Name', 'Account', 'Start Date', 'End Date', 'Budget',
                     'Total Spend', 'Pacing %', 'DR %', 'Current DRR', 'Required DRR',
-                    'CTR', 'DPVR', 'ROAS', 'Status']
-
+                    'CTR', 'DPVR', 'ROAS', 'Status Display']
     available_cols = [c for c in display_cols if c in filtered_df.columns]
 
     st.dataframe(
@@ -381,76 +385,96 @@ if uploaded_file is not None:
     st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════
-    # VISUAL ANALYTICS
+    # ANALYTICS
     # ═══════════════════════════════════════════════════════════
     st.header("📈 Analytics")
+
+    # Only use orders with valid budget and pacing for charts
+    chart_data = active_df[(active_df['Budget'] > 0) & (active_df['Pacing %'] > 0)].copy()
 
     tab1, tab2, tab3, tab4 = st.tabs(["🎯 Pacing Distribution", "💰 Budget vs Spend", "📊 DRR Gap", "🏆 Performance"])
 
     with tab1:
-        fig = px.histogram(
-            active_df[active_df['Pacing %'] > 0], 
-            x='Pacing %', nbins=25,
-            color='Status',
-            color_discrete_map={
-                '🟢 On Track': '#4caf50',
-                '🟡 Under-delivering': '#ff9800',
-                '🔵 Over-delivering': '#2196f3',
-                '🔴 Not Spending': '#f44336'
-            },
-            title="Pacing Distribution (Active Orders)"
-        )
-        fig.add_vline(x=under_threshold, line_dash="dash", line_color="orange")
-        fig.add_vline(x=over_threshold, line_dash="dash", line_color="blue")
-        st.plotly_chart(fig, use_container_width=True)
+        if len(chart_data) > 0:
+            fig = px.histogram(
+                chart_data,
+                x='Pacing %',
+                nbins=25,
+                color='Status',
+                color_discrete_map=STATUS_COLORS,
+                title="Pacing Distribution (Active Orders with Budget)"
+            )
+            fig.add_vline(x=under_threshold, line_dash="dash", line_color="orange", annotation_text=f"{under_threshold}%")
+            fig.add_vline(x=over_threshold, line_dash="dash", line_color="blue", annotation_text=f"{over_threshold}%")
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No orders with valid pacing data to display.")
 
     with tab2:
-        fig2 = px.scatter(
-            active_df[active_df['Budget'] > 0],
-            x='Budget', y='Total Spend',
-            color='Status',
-            hover_name='Order Name',
-            size='Impressions',
-            color_discrete_map={
-                '🟢 On Track': '#4caf50',
-                '🟡 Under-delivering': '#ff9800',
-                '🔵 Over-delivering': '#2196f3',
-                '🔴 Not Spending': '#f44336'
-            },
-            title="Budget vs Spend (size = impressions)"
-        )
-        max_val = max(active_df['Budget'].max(), active_df['Total Spend'].max()) * 1.1
-        fig2.add_trace(go.Scatter(x=[0, max_val], y=[0, max_val], mode='lines', 
-                                   line=dict(dash='dash', color='gray'), name='Ideal'))
-        st.plotly_chart(fig2, use_container_width=True)
+        if len(chart_data) > 0:
+            fig2 = px.scatter(
+                chart_data,
+                x='Budget',
+                y='Total Spend',
+                color='Status',
+                hover_name='Order Name',
+                color_discrete_map=STATUS_COLORS,
+                title="Budget vs Spend"
+            )
+            max_val = chart_data[['Budget', 'Total Spend']].max().max() * 1.1
+            fig2.add_trace(go.Scatter(
+                x=[0, max_val], y=[0, max_val],
+                mode='lines',
+                line=dict(dash='dash', color='gray'),
+                name='Ideal (1:1)',
+                showlegend=True
+            ))
+            fig2.update_layout(height=500)
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("No data to display.")
 
     with tab3:
-        drr_df = active_df[(active_df['Remaining Days'] > 0) & (active_df['Budget'] > 0)].copy()
-        drr_df['DRR Gap'] = drr_df['Current DRR'] - drr_df['Required DRR']
-        drr_df = drr_df.nsmallest(15, 'DRR Gap')
-        drr_df['Order Short'] = drr_df['Order Name'].str[:50]
+        drr_data = active_df[(active_df['Remaining Days'] > 0) & (active_df['Budget'] > 0)].copy()
+        if len(drr_data) > 0:
+            drr_data['DRR Gap'] = drr_data['Current DRR'] - drr_data['Required DRR']
+            drr_data = drr_data.nsmallest(15, 'DRR Gap')
+            drr_data['Order Short'] = drr_data['Order Name'].str[:50]
+            drr_data['Gap Type'] = np.where(drr_data['DRR Gap'] < 0, 'Needs Boost', 'On Pace')
 
-        fig3 = px.bar(
-            drr_df, x='DRR Gap', y='Order Short', orientation='h',
-            color=np.where(drr_df['DRR Gap'] < 0, 'Needs Boost', 'On Pace'),
-            color_discrete_map={'Needs Boost': '#f44336', 'On Pace': '#4caf50'},
-            title="Top 15 Orders Needing DRR Increase"
-        )
-        fig3.update_layout(height=500, yaxis_title="")
-        st.plotly_chart(fig3, use_container_width=True)
+            fig3 = px.bar(
+                drr_data,
+                x='DRR Gap',
+                y='Order Short',
+                orientation='h',
+                color='Gap Type',
+                color_discrete_map={'Needs Boost': '#f44336', 'On Pace': '#4caf50'},
+                title="Top 15 Orders Needing DRR Increase (Negative = Behind)"
+            )
+            fig3.update_layout(height=500, yaxis_title="")
+            st.plotly_chart(fig3, use_container_width=True)
+        else:
+            st.info("No orders with remaining days to display.")
 
     with tab4:
-        perf_df = active_df[active_df['Budget'] > 0][['Account', 'CTR', 'DPVR', 'ROAS']].copy()
-        perf_df['Account Short'] = perf_df['Account'].str.replace('IN - GCS - CEPC - ', '')
-        perf_agg = perf_df.groupby('Account Short').mean(numeric_only=True).reset_index()
+        perf_data = active_df[active_df['Budget'] > 0].copy()
+        if len(perf_data) > 0:
+            perf_data['Account Short'] = perf_data['Account'].str.replace('IN - GCS - CEPC - ', '', regex=False)
+            perf_agg = perf_data.groupby('Account Short')[['CTR', 'DPVR']].mean().reset_index()
 
-        fig4 = px.bar(
-            perf_agg.melt(id_vars='Account Short', value_vars=['CTR', 'DPVR']),
-            x='Account Short', y='value', color='variable',
-            barmode='group', title="CTR & DPVR by Account"
-        )
-        fig4.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig4, use_container_width=True)
+            fig4 = px.bar(
+                perf_agg.melt(id_vars='Account Short', value_vars=['CTR', 'DPVR']),
+                x='Account Short',
+                y='value',
+                color='variable',
+                barmode='group',
+                title="Average CTR & DPVR by Account"
+            )
+            fig4.update_layout(xaxis_tickangle=-45, height=400)
+            st.plotly_chart(fig4, use_container_width=True)
+        else:
+            st.info("No performance data to display.")
 
     st.markdown("---")
 
@@ -463,22 +487,22 @@ if uploaded_file is not None:
 
     with al_col1:
         st.subheader("🔴 Not Spending / Zero Delivery")
-        not_spending = active_df[active_df['Status'] == '🔴 Not Spending']
+        not_spending = active_df[active_df['Status'] == 'Not Spending']
         if len(not_spending) > 0:
             for _, row in not_spending.iterrows():
                 st.error(f"**{row['Order Name'][:60]}**\n\n"
-                        f"Budget: ₹{row['Budget']:,.0f} | Spend: ₹{row['Total Spend']:,.0f}")
+                         f"Budget: ₹{row['Budget']:,.0f} | Spend: ₹{row['Total Spend']:,.0f}")
         else:
             st.success("✅ All orders are spending!")
 
     with al_col2:
         st.subheader("🟡 Severely Under (<80%)")
-        severe = active_df[(active_df['Pacing %'] < 80) & (active_df['Pacing %'] > 0)]
+        severe = active_df[(active_df['Pacing %'] < 80) & (active_df['Pacing %'] > 0) & (active_df['Budget'] > 0)]
         if len(severe) > 0:
             for _, row in severe.head(10).iterrows():
+                gap = row['Ideal Spend'] - row['Total Spend']
                 st.warning(f"**{row['Order Name'][:60]}**\n\n"
-                          f"Pacing: {row['Pacing %']:.1f}% | "
-                          f"Gap: ₹{row['Ideal Spend'] - row['Total Spend']:,.0f}")
+                           f"Pacing: {row['Pacing %']:.1f}% | Gap: ₹{gap:,.0f}")
         else:
             st.success("✅ No severely under-delivering orders!")
 
@@ -498,12 +522,13 @@ if uploaded_file is not None:
             "text/csv"
         )
     with dl2:
-        st.download_button(
-            "⬇️ Account Summary (CSV)",
-            account_summary.to_csv(index=False),
-            f"account_summary_{report_date.strftime('%Y%m%d')}.csv",
-            "text/csv"
-        )
+        if 'account_summary' in dir():
+            st.download_button(
+                "⬇️ Account Summary (CSV)",
+                account_summary.to_csv(index=False),
+                f"account_summary_{report_date.strftime('%Y%m%d')}.csv",
+                "text/csv"
+            )
 
 else:
     # ═══════════════════════════════════════════════════════════
@@ -552,7 +577,7 @@ else:
     | 🟢 On Track | 98% ≤ Pacing ≤ 105% |
     | 🟡 Under-delivering | Pacing < 98% |
     | 🔵 Over-delivering | Pacing > 105% |
-    | 🔴 Not Spending | Zero spend or "Line items not running" |
+    | 🔴 Not Spending | Zero spend or line items not running |
     | ⏹️ Ended | Order completed |
     """)
 
