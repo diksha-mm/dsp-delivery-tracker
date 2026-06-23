@@ -16,11 +16,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Hide edit/fork buttons and toolbar for viewers
 st.markdown("""
 <style>
     .stMetric > div { background-color: #f8f9fa; border-radius: 8px; padding: 10px; }
-    div[data-testid="stMetricValue"] { font-size: 26px; }
+    div[data-testid="stMetricValue"] { font-size: 24px; }
     .block-container { padding-top: 1rem; }
     [data-testid="stToolbar"] { display: none !important; }
     .stDeployButton { display: none !important; }
@@ -64,15 +63,9 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════
 
 def extract_budget_from_name(order_name):
-    """Extract budget from the LAST number+unit in order name.
-    Takes the last occurrence of K or L in the string.
-    Example: '...4.5L_Jun26-Jul26...38K' -> 38000 (last match wins)
-    """
     if pd.isna(order_name):
         return 0
     name = str(order_name)
-
-    # Find ALL matches of number followed by K or L with their positions
     all_matches = []
     for match in re.finditer(r'(\d+\.?\d*)\s*([KkLl])', name):
         value = float(match.group(1))
@@ -82,12 +75,9 @@ def extract_budget_from_name(order_name):
             all_matches.append((position, value * 100000))
         elif unit == 'K':
             all_matches.append((position, value * 1000))
-
     if all_matches:
-        # Sort by position and take the LAST one
         all_matches.sort(key=lambda x: x[0])
         return all_matches[-1][1]
-
     return 0
 
 
@@ -95,7 +85,6 @@ def process_entity_order_summary(df, today):
     df = df.copy()
     df = df.dropna(how='all')
 
-    # Standardize column names
     col_map = {}
     used_names = set()
     for col in df.columns:
@@ -129,6 +118,8 @@ def process_entity_order_summary(df, today):
             mapped_name = 'Purchases'
         elif 'ecpm' in cl:
             mapped_name = 'eCPM'
+        elif 'new-to-brand' in cl or 'ntb' in cl:
+            mapped_name = 'NTB'
 
         if mapped_name and mapped_name not in used_names:
             col_map[col] = mapped_name
@@ -148,17 +139,19 @@ def process_entity_order_summary(df, today):
     df['End Date'] = pd.to_datetime(df['End Date'], errors='coerce')
     today = pd.Timestamp(today)
 
-    for col in ['Budget', 'Total Spend', 'Impressions', 'Clicks', 'CTR', 'ROAS', 'DPVR', 'Purchases', 'eCPM']:
+    for col in ['Budget', 'Total Spend', 'Impressions', 'Clicks', 'CTR', 'ROAS', 'DPVR', 'Purchases', 'eCPM', 'NTB']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # Budget extraction from LAST number in order name
+    # Ensure NTB column exists
+    if 'NTB' not in df.columns:
+        df['NTB'] = 0
+
     df['Budget'] = df.apply(
         lambda row: extract_budget_from_name(row['Order Name']) if row.get('Budget', 0) == 0 else row['Budget'],
         axis=1
     )
 
-    # Pacing calculations
     df['Total Days'] = (df['End Date'] - df['Start Date']).dt.days + 1
     df['Elapsed Days'] = ((today - df['Start Date']).dt.days + 1).clip(lower=0)
     df['Elapsed Days'] = df[['Elapsed Days', 'Total Days']].min(axis=1)
@@ -200,18 +193,8 @@ def process_entity_order_summary(df, today):
 
 
 # ═══════════════════════════════════════════════════════════════
-# COLOR MAP
+# COLOR HELPERS
 # ═══════════════════════════════════════════════════════════════
-STATUS_COLORS = {
-    'On Track': '#4caf50',
-    'Under-delivering': '#ff9800',
-    'Over-delivering': '#2196f3',
-    'Not Spending': '#f44336',
-    'No Budget': '#9e9e9e',
-    'Inactive': '#9e9e9e',
-    'Ended': '#607d8b'
-}
-
 STATUS_ICONS = {
     'On Track': '🟢',
     'Under-delivering': '🟡',
@@ -221,6 +204,66 @@ STATUS_ICONS = {
     'Inactive': '⚪',
     'Ended': '⏹️'
 }
+
+
+def ctr_color(val):
+    """CTR: Good >0.006 (0.6%), Average 0.004-0.006, Poor <0.004"""
+    if val > 0.006:
+        return 'background-color: #c8e6c9; color: #2e7d32'
+    elif val >= 0.004:
+        return 'background-color: #fff9c4; color: #f57f17'
+    else:
+        return 'background-color: #ffcdd2; color: #c62828'
+
+
+def dpvr_color(val, ctr_val):
+    """DPVR: Good if > CTR, Poor if < CTR"""
+    if val > ctr_val:
+        return 'background-color: #c8e6c9; color: #2e7d32'
+    else:
+        return 'background-color: #ffcdd2; color: #c62828'
+
+
+def ntb_color(val):
+    """NTB: Good >60% (0.6), Poor <60%"""
+    if val > 0.6:
+        return 'background-color: #c8e6c9; color: #2e7d32'
+    elif val >= 0.4:
+        return 'background-color: #fff9c4; color: #f57f17'
+    else:
+        return 'background-color: #ffcdd2; color: #c62828'
+
+
+def roas_color(val):
+    """ROAS: Good >2, Average 1-2, Poor <1"""
+    if val > 2:
+        return 'background-color: #c8e6c9; color: #2e7d32'
+    elif val >= 1:
+        return 'background-color: #fff9c4; color: #f57f17'
+    else:
+        return 'background-color: #ffcdd2; color: #c62828'
+
+
+def style_performance_table(styler, df_source):
+    """Apply color coding to performance metrics table"""
+    styler = styler.applymap(ctr_color, subset=['CTR'])
+    styler = styler.applymap(ntb_color, subset=['NTB'])
+    styler = styler.applymap(roas_color, subset=['ROAS'])
+
+    # DPVR color based on comparison with CTR
+    def dpvr_style(col):
+        styles = []
+        for idx in col.index:
+            dpvr_val = col[idx]
+            ctr_val = df_source.loc[idx, 'CTR'] if idx in df_source.index else 0
+            if dpvr_val > ctr_val:
+                styles.append('background-color: #c8e6c9; color: #2e7d32')
+            else:
+                styles.append('background-color: #ffcdd2; color: #c62828')
+        return styles
+
+    styler = styler.apply(dpvr_style, subset=['DPVR'])
+    return styler
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -245,11 +288,45 @@ if uploaded_file is not None:
     else:
         active_df = df[~df['Status'].isin(['Ended', 'Inactive'])].copy()
 
-    # Counts for all statuses
+    # Counts
     delivering_count = len(df[df['Order Status'] == 'Delivering'])
     inactive_count = len(df[df['Order Status'] == 'Inactive'])
     ended_count = len(df[df['Order Status'] == 'Ended'])
     line_not_running = len(df[df['Order Status'] == 'Line items not running'])
+    inactive_combined = inactive_count + line_not_running
+
+    # Pacing counts (active/delivering only)
+    status_counts = active_df['Status'].value_counts()
+    on_track_count = status_counts.get('On Track', 0)
+    under_count = status_counts.get('Under-delivering', 0)
+    over_count = status_counts.get('Over-delivering', 0)
+    not_spending_count = status_counts.get('Not Spending', 0)
+
+    total_budget = active_df[active_df['Budget'] > 0]['Budget'].sum()
+    total_spend = active_df['Total Spend'].sum()
+    total_ideal = active_df[active_df['Budget'] > 0]['Ideal Spend'].sum()
+    current_dr = (total_spend / total_ideal * 100) if total_ideal > 0 else 0
+
+    # Budget at risk = budget of orders pacing < 80%
+    at_risk_orders = active_df[(active_df['Pacing %'] < 80) & (active_df['Budget'] > 0)]
+    budget_at_risk = at_risk_orders['Remaining Budget'].sum()
+
+    # Unique accounts
+    total_accounts = df['Account Short'].nunique()
+    active_accounts = active_df['Account Short'].nunique()
+
+    # Account-level pacing for summary
+    acct_df = active_df[active_df['Budget'] > 0].copy()
+    if len(acct_df) > 0:
+        acct_agg = acct_df.groupby('Account Short').agg({
+            'Budget': 'sum', 'Total Spend': 'sum', 'Ideal Spend': 'sum'
+        }).reset_index()
+        acct_agg['Pacing %'] = np.where(acct_agg['Ideal Spend'] > 0, (acct_agg['Total Spend'] / acct_agg['Ideal Spend']) * 100, 0)
+        acct_under = len(acct_agg[acct_agg['Pacing %'] < under_threshold])
+        acct_over = len(acct_agg[acct_agg['Pacing %'] > over_threshold])
+        acct_on_track = len(acct_agg[(acct_agg['Pacing %'] >= under_threshold) & (acct_agg['Pacing %'] <= over_threshold)])
+    else:
+        acct_under = acct_over = acct_on_track = 0
 
     # ═══════════════════════════════════════════════════════════
     # HEADER
@@ -258,40 +335,40 @@ if uploaded_file is not None:
     st.caption(f"📅 {report_date.strftime('%d %B %Y')} | Total Orders: {len(df)}")
     st.markdown("---")
 
-    # ROW 1: Order Status Summary
-    st.subheader("📦 Order Status Summary")
-    s1, s2, s3, s4, s5 = st.columns(5)
-    s1.metric("📦 Total Orders", len(df))
-    s2.metric("🟢 Delivering", delivering_count)
-    s3.metric("⏹️ Ended", ended_count)
-    s4.metric("⚪ Inactive", inactive_count)
-    s5.metric("🔴 Lines Not Running", line_not_running)
-
-    st.markdown("---")
-
-    # ROW 2: Pacing Status (Active/Delivering only)
-    status_counts = active_df['Status'].value_counts()
-    total_budget = active_df[active_df['Budget'] > 0]['Budget'].sum()
-    total_spend = active_df['Total Spend'].sum()
-
-    st.subheader("🚦 Pacing Status (Delivering Orders)")
-    p1, p2, p3, p4, p5, p6, p7 = st.columns(7)
-    p1.metric("📋 Active", len(active_df))
-    p2.metric("🟢 On Track", status_counts.get('On Track', 0))
-    p3.metric("🟡 Under", status_counts.get('Under-delivering', 0))
-    p4.metric("🔵 Over", status_counts.get('Over-delivering', 0))
-    p5.metric("🔴 Not Spending", status_counts.get('Not Spending', 0))
-    p6.metric("💰 Budget", f"₹{total_budget/100000:.1f}L")
-    p7.metric("💸 Spend", f"₹{total_spend/100000:.1f}L")
+    # ═══════════════════════════════════════════════════════════
+    # ACCOUNT LEVEL SUMMARY
+    # ═══════════════════════════════════════════════════════════
+    st.subheader("🏢 Account Level Summary")
+    a1, a2, a3, a4, a5, a6, a7 = st.columns(7)
+    a1.metric("Total Accounts", total_accounts)
+    a2.metric("Active Accounts", active_accounts)
+    a3.metric("🟡 Under-delivery", acct_under)
+    a4.metric("🔵 Over-delivery", acct_over)
+    a5.metric("🟢 On Track", acct_on_track)
+    a6.metric("💰 Total Budget", f"₹{total_budget/100000:.1f}L")
+    a7.metric("📊 Current DR%", f"{current_dr:.1f}%")
 
     st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════
-    # ACCOUNT-LEVEL VIEW
+    # ORDER LEVEL SUMMARY
+    # ═══════════════════════════════════════════════════════════
+    st.subheader("📋 Order Level Summary")
+    o1, o2, o3, o4, o5, o6, o7 = st.columns(7)
+    o1.metric("Total Orders", len(df))
+    o2.metric("🟢 Active Orders", delivering_count)
+    o3.metric("⚪ Inactive/Not Running", inactive_combined)
+    o4.metric("🟢 On Track", on_track_count)
+    o5.metric("🟡 Under-delivering", under_count)
+    o6.metric("🔵 Over-delivering", over_count)
+    o7.metric("⚠️ Budget at Risk", f"₹{budget_at_risk/100000:.1f}L")
+
+    st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════
+    # ACCOUNT-LEVEL OVERVIEW (TABLE ONLY)
     # ═══════════════════════════════════════════════════════════
     st.header("🏢 Account-Level Overview")
-
-    acct_df = active_df[active_df['Budget'] > 0].copy()
 
     if len(acct_df) > 0:
         account_summary = acct_df.groupby('Account Short').agg({
@@ -329,8 +406,7 @@ if uploaded_file is not None:
         account_summary['Status'] = account_summary.apply(acct_status, axis=1)
         account_summary = account_summary.sort_values('Pacing %', ascending=True)
 
-        # ACCOUNT TABLE
-        st.subheader(f"📋 {len(account_summary)} Accounts")
+        st.caption(f"{len(account_summary)} Accounts")
 
         acct_display = account_summary[['Account', 'Budget', 'Spends', 'DR %', 'Expected DR %', 'Pacing %', 'CTR', 'DPVR', 'ROAS', 'Orders', 'Status']].copy()
         acct_display['Status'] = acct_display['Status'].map(lambda x: f"{STATUS_ICONS.get(x, '')} {x}")
@@ -350,27 +426,10 @@ if uploaded_file is not None:
             height=min(600, max(250, len(account_summary) * 38))
         )
 
-        # Chart collapsed
-        with st.expander("📊 Account Pacing Chart", expanded=False):
-            chart_acct = pd.DataFrame({
-                'Account': account_summary['Account'],
-                'Pacing %': account_summary['Pacing %'],
-                'Status': account_summary['Status']
-            })
-            fig_accounts = px.bar(
-                chart_acct,
-                x='Pacing %', y='Account', orientation='h',
-                color='Status', color_discrete_map=STATUS_COLORS,
-            )
-            fig_accounts.add_vline(x=under_threshold, line_dash="dash", line_color="orange")
-            fig_accounts.add_vline(x=over_threshold, line_dash="dash", line_color="blue")
-            fig_accounts.update_layout(height=max(300, len(account_summary) * 28), yaxis_title="", showlegend=False)
-            st.plotly_chart(fig_accounts, use_container_width=True)
-
     st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════
-    # ORDER-LEVEL
+    # ORDER-LEVEL DELIVERY TRACKER
     # ═══════════════════════════════════════════════════════════
     st.header("📋 Order-Level Delivery Tracker")
 
@@ -425,268 +484,134 @@ if uploaded_file is not None:
     st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════
-    # ANALYTICS (IMPROVED CHARTS)
+    # PERFORMANCE METRICS (COLOR CODED TABLE)
     # ═══════════════════════════════════════════════════════════
-    st.header("📈 Analytics")
+    st.header("📈 Performance Metrics")
+    st.caption("Color coding: 🟢 Good | 🟡 Average | 🔴 Poor")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🎯 Pacing Overview", "💰 Budget vs Spend", "📊 DRR Analysis", "🏆 Performance"])
+    # Account selector for drilling into orders
+    perf_view = st.radio("View by:", ["Account Level", "Order Level"], horizontal=True)
 
-    with tab1:
-        pacing_data = active_df[(active_df['Budget'] > 0) & (active_df['Pacing %'] > 0)]
-        if len(pacing_data) > 0:
-            # Donut chart for status distribution
-            col_chart1, col_chart2 = st.columns(2)
-
-            with col_chart1:
-                status_dist = pacing_data['Status'].value_counts().reset_index()
-                status_dist.columns = ['Status', 'Count']
-                fig_donut = px.pie(
-                    status_dist,
-                    values='Count',
-                    names='Status',
-                    color='Status',
-                    color_discrete_map=STATUS_COLORS,
-                    hole=0.5,
-                    title="Order Status Distribution"
-                )
-                fig_donut.update_traces(textposition='inside', textinfo='percent+value')
-                fig_donut.update_layout(height=350, showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.2))
-                st.plotly_chart(fig_donut, use_container_width=True)
-
-            with col_chart2:
-                hist_df = pd.DataFrame({
-                    'Pacing': pacing_data['Pacing %'].values,
-                    'Status': pacing_data['Status'].values
-                })
-                fig_hist = px.histogram(
-                    hist_df, x='Pacing', nbins=20,
-                    color='Status', color_discrete_map=STATUS_COLORS,
-                    title="Pacing Distribution"
-                )
-                fig_hist.add_vline(x=under_threshold, line_dash="dash", line_color="orange", annotation_text=f"{under_threshold}%")
-                fig_hist.add_vline(x=over_threshold, line_dash="dash", line_color="blue", annotation_text=f"{over_threshold}%")
-                fig_hist.update_layout(height=350, bargap=0.05, showlegend=False)
-                st.plotly_chart(fig_hist, use_container_width=True)
-
-            # Account-wise pacing bar (horizontal, sorted)
-            acct_pacing = pd.DataFrame({
-                'Account': account_summary['Account'].values,
-                'Pacing %': account_summary['Pacing %'].values,
-                'Status': account_summary['Status'].values,
-                'Budget': account_summary['Budget'].values,
-                'Spends': account_summary['Spends'].values
-            }).sort_values('Pacing %', ascending=True)
-
-            fig_acct_bar = px.bar(
-                acct_pacing,
-                y='Account', x='Pacing %', orientation='h',
-                color='Status', color_discrete_map=STATUS_COLORS,
-                title="Account-wise Pacing",
-                hover_data=['Budget', 'Spends']
-            )
-            fig_acct_bar.add_vline(x=under_threshold, line_dash="dash", line_color="orange")
-            fig_acct_bar.add_vline(x=over_threshold, line_dash="dash", line_color="blue")
-            fig_acct_bar.update_layout(
-                height=max(350, len(acct_pacing) * 30),
-                yaxis_title="", xaxis_title="Pacing %",
-                showlegend=False, margin=dict(l=10)
-            )
-            st.plotly_chart(fig_acct_bar, use_container_width=True)
-        else:
-            st.info("No data to display.")
-
-    with tab2:
-        scatter_data = active_df[(active_df['Budget'] > 0)]
-        if len(scatter_data) > 0:
-            scatter_df = pd.DataFrame({
-                'Budget': scatter_data['Budget'].values,
-                'Spend': scatter_data['Total Spend'].values,
-                'Status': scatter_data['Status'].values,
-                'Order': scatter_data['Order Name'].str[:50].values,
-                'Account': scatter_data['Account Short'].values
-            })
-
-            fig2 = px.scatter(
-                scatter_df,
-                x='Budget', y='Spend',
-                color='Status', hover_name='Order',
-                color_discrete_map=STATUS_COLORS,
-                title="Budget vs Actual Spend (Ideal = on dashed line)",
-                size_max=15
-            )
-            max_val = scatter_df[['Budget', 'Spend']].max().max() * 1.1
-            fig2.add_trace(go.Scatter(
-                x=[0, max_val], y=[0, max_val],
-                mode='lines', line=dict(dash='dash', color='rgba(0,0,0,0.3)', width=2),
-                name='Ideal (1:1)', showlegend=True
-            ))
-            fig2.update_layout(
-                height=450,
-                xaxis_title="Budget (₹)", yaxis_title="Spend (₹)",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            st.plotly_chart(fig2, use_container_width=True)
-
-            # Budget utilization by account
-            util_df = pd.DataFrame({
-                'Account': account_summary['Account'].values,
-                'Budget': account_summary['Budget'].values,
-                'Spends': account_summary['Spends'].values,
-                'Remaining': (account_summary['Budget'] - account_summary['Spends']).values
-            }).sort_values('Budget', ascending=True)
-
-            fig_util = go.Figure()
-            fig_util.add_trace(go.Bar(
-                y=util_df['Account'], x=util_df['Spends'],
-                name='Spent', orientation='h',
-                marker_color='#4caf50'
-            ))
-            fig_util.add_trace(go.Bar(
-                y=util_df['Account'], x=util_df['Remaining'],
-                name='Remaining', orientation='h',
-                marker_color='#e0e0e0'
-            ))
-            fig_util.update_layout(
-                barmode='stack', title="Budget Utilization by Account",
-                height=max(350, len(util_df) * 30),
-                xaxis_title="Amount (₹)", yaxis_title="",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02)
-            )
-            st.plotly_chart(fig_util, use_container_width=True)
-        else:
-            st.info("No data to display.")
-
-    with tab3:
-        drr_source = active_df[(active_df['Remaining Days'] > 0) & (active_df['Budget'] > 0)].copy()
-        if len(drr_source) > 0:
-            drr_source['DRR Gap'] = drr_source['Current DRR'] - drr_source['Required DRR']
-            drr_source['DRR Gap %'] = np.where(
-                drr_source['Required DRR'] > 0,
-                ((drr_source['Current DRR'] - drr_source['Required DRR']) / drr_source['Required DRR']) * 100,
-                0
-            )
-
-            # Top 15 needing boost
-            drr_worst = drr_source.nsmallest(15, 'DRR Gap')
-
-            drr_chart = pd.DataFrame({
-                'Order': drr_worst['Order Name'].str[:45].values,
-                'DRR Gap (₹)': drr_worst['DRR Gap'].values,
-                'Current DRR': drr_worst['Current DRR'].values,
-                'Required DRR': drr_worst['Required DRR'].values,
-                'Type': np.where(drr_worst['DRR Gap'].values < 0, 'Needs Boost', 'On Pace')
-            })
-
-            fig3 = px.bar(
-                drr_chart,
-                x='DRR Gap (₹)', y='Order', orientation='h',
-                color='Type',
-                color_discrete_map={'Needs Boost': '#ef5350', 'On Pace': '#66bb6a'},
-                title="Top 15 Orders: DRR Gap (Current vs Required Daily Run Rate)",
-                hover_data=['Current DRR', 'Required DRR']
-            )
-            fig3.update_layout(
-                height=500, yaxis_title="",
-                xaxis_title="DRR Gap (₹) — Negative = Behind Schedule",
-                showlegend=False, margin=dict(l=10)
-            )
-            st.plotly_chart(fig3, use_container_width=True)
-
-            # DRR comparison table
-            with st.expander("📋 Full DRR Comparison Table"):
-                drr_table = pd.DataFrame({
-                    'Account': drr_source['Account Short'].values,
-                    'Order': drr_source['Order Name'].str[:50].values,
-                    'Current DRR': drr_source['Current DRR'].values,
-                    'Required DRR': drr_source['Required DRR'].values,
-                    'DRR Gap': drr_source['DRR Gap'].values,
-                    'Remaining Days': drr_source['Remaining Days'].values
-                }).sort_values('DRR Gap', ascending=True)
-
-                st.dataframe(
-                    drr_table.style.format({
-                        'Current DRR': '₹{:,.0f}',
-                        'Required DRR': '₹{:,.0f}',
-                        'DRR Gap': '₹{:,.0f}',
-                        'Remaining Days': '{:.0f}'
-                    }),
-                    use_container_width=True, height=400
-                )
-        else:
-            st.info("No data to display.")
-
-    with tab4:
-        perf_source = active_df[active_df['Budget'] > 0]
+    if perf_view == "Account Level":
+        perf_source = active_df[active_df['Budget'] > 0].copy()
         if len(perf_source) > 0:
             perf_agg = perf_source.groupby('Account Short').agg({
                 'CTR': 'mean',
                 'DPVR': 'mean',
+                'NTB': 'mean',
                 'ROAS': 'mean',
-                'Total Spend': 'sum'
-            }).reset_index().sort_values('Total Spend', ascending=False)
+                'Total Spend': 'sum',
+                'Order Name': 'count'
+            }).reset_index()
+            perf_agg.columns = ['Account', 'CTR', 'DPVR', 'NTB', 'ROAS', 'Spend', 'Orders']
+            perf_agg = perf_agg.sort_values('Spend', ascending=False).reset_index(drop=True)
 
-            # CTR & DPVR grouped bar
-            perf_melt = perf_agg.melt(id_vars='Account Short', value_vars=['CTR', 'DPVR'])
-            fig4 = px.bar(
-                perf_melt,
-                x='Account Short', y='value', color='variable',
-                barmode='group', title="Average CTR & DPVR by Account",
-                color_discrete_map={'CTR': '#1565c0', 'DPVR': '#64b5f6'}
-            )
-            fig4.update_layout(
-                xaxis_tickangle=-45, height=400,
-                xaxis_title="", yaxis_title="Rate",
-                legend_title="Metric",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            st.plotly_chart(fig4, use_container_width=True)
+            # Style the table
+            styled = perf_agg[['Account', 'CTR', 'DPVR', 'NTB', 'ROAS', 'Spend', 'Orders']].style.format({
+                'CTR': '{:.4f}',
+                'DPVR': '{:.4f}',
+                'NTB': '{:.2%}',
+                'ROAS': '{:.2f}',
+                'Spend': '₹{:,.0f}'
+            })
 
-            # ROAS bar
-            roas_df = perf_agg[perf_agg['ROAS'] > 0].sort_values('ROAS', ascending=True)
-            if len(roas_df) > 0:
-                fig_roas = px.bar(
-                    roas_df,
-                    y='Account Short', x='ROAS', orientation='h',
-                    title="ROAS by Account",
-                    color='ROAS',
-                    color_continuous_scale='Greens'
-                )
-                fig_roas.update_layout(
-                    height=max(300, len(roas_df) * 30),
-                    yaxis_title="", xaxis_title="ROAS",
-                    showlegend=False
-                )
-                st.plotly_chart(fig_roas, use_container_width=True)
-        else:
-            st.info("No data to display.")
+            # Apply color coding
+            styled = styled.applymap(ctr_color, subset=['CTR'])
+            styled = styled.applymap(roas_color, subset=['ROAS'])
+            styled = styled.applymap(ntb_color, subset=['NTB'])
 
+            # DPVR vs CTR comparison
+            def dpvr_vs_ctr(s):
+                styles = []
+                for idx in s.index:
+                    dpvr_val = perf_agg.loc[idx, 'DPVR']
+                    ctr_val = perf_agg.loc[idx, 'CTR']
+                    if dpvr_val > ctr_val:
+                        styles.append('background-color: #c8e6c9; color: #2e7d32')
+                    else:
+                        styles.append('background-color: #ffcdd2; color: #c62828')
+                return styles
+
+            styled = styled.apply(dpvr_vs_ctr, subset=['DPVR'])
+
+            st.dataframe(styled, use_container_width=True, height=min(600, max(250, len(perf_agg) * 38)))
+
+    else:
+        # Order level with account filter
+        perf_acct_filter = st.selectbox("Select Account", options=["All"] + sorted(active_df['Account Short'].unique().tolist()))
+
+        perf_orders = active_df[active_df['Budget'] > 0].copy()
+        if perf_acct_filter != "All":
+            perf_orders = perf_orders[perf_orders['Account Short'] == perf_acct_filter]
+
+        if len(perf_orders) > 0:
+            perf_order_display = pd.DataFrame({
+                'Account': perf_orders['Account Short'].values,
+                'Order Name': perf_orders['Order Name'].str[:60].values,
+                'CTR': perf_orders['CTR'].values,
+                'DPVR': perf_orders['DPVR'].values,
+                'NTB': perf_orders['NTB'].values,
+                'ROAS': perf_orders['ROAS'].values,
+                'Spend': perf_orders['Total Spend'].values
+            }).reset_index(drop=True)
+
+            styled_orders = perf_order_display.style.format({
+                'CTR': '{:.4f}',
+                'DPVR': '{:.4f}',
+                'NTB': '{:.2%}',
+                'ROAS': '{:.2f}',
+                'Spend': '₹{:,.0f}'
+            })
+
+            styled_orders = styled_orders.applymap(ctr_color, subset=['CTR'])
+            styled_orders = styled_orders.applymap(roas_color, subset=['ROAS'])
+            styled_orders = styled_orders.applymap(ntb_color, subset=['NTB'])
+
+            def dpvr_vs_ctr_orders(s):
+                styles = []
+                for idx in s.index:
+                    dpvr_val = perf_order_display.loc[idx, 'DPVR']
+                    ctr_val = perf_order_display.loc[idx, 'CTR']
+                    if dpvr_val > ctr_val:
+                        styles.append('background-color: #c8e6c9; color: #2e7d32')
+                    else:
+                        styles.append('background-color: #ffcdd2; color: #c62828')
+                return styles
+
+            styled_orders = styled_orders.apply(dpvr_vs_ctr_orders, subset=['DPVR'])
+
+            st.dataframe(styled_orders, use_container_width=True, height=min(600, max(250, len(perf_order_display) * 38)))
+
+    # Legend
     st.markdown("---")
-
-    # ═══════════════════════════════════════════════════════════
-    # ALERTS
-    # ═══════════════════════════════════════════════════════════
-    st.header("🚨 Alerts")
-
-    al1, al2 = st.columns(2)
-    with al1:
-        st.subheader("🔴 Not Spending")
-        not_spending = active_df[active_df['Status'] == 'Not Spending']
-        if len(not_spending) > 0:
-            for _, row in not_spending.head(10).iterrows():
-                st.error(f"**{row['Account Short']}** — {row['Order Name'][:50]}\n\n"
-                         f"Budget: ₹{row['Budget']:,.0f} | Spend: ₹{row['Total Spend']:,.0f}")
-        else:
-            st.success("✅ All orders spending!")
-
-    with al2:
-        st.subheader("🟡 Severely Under (<80%)")
-        severe = active_df[(active_df['Pacing %'] < 80) & (active_df['Pacing %'] > 0) & (active_df['Budget'] > 0)]
-        if len(severe) > 0:
-            for _, row in severe.head(10).iterrows():
-                st.warning(f"**{row['Account Short']}** — {row['Order Name'][:50]}\n\n"
-                           f"Pacing: {row['Pacing %']:.1f}%")
-        else:
-            st.success("✅ No severely under-delivering!")
+    leg1, leg2, leg3, leg4 = st.columns(4)
+    with leg1:
+        st.markdown("""
+        **CTR Thresholds:**
+        - 🟢 Good: > 0.6%
+        - 🟡 Average: 0.4% - 0.6%
+        - 🔴 Poor: < 0.4%
+        """)
+    with leg2:
+        st.markdown("""
+        **DPVR:**
+        - 🟢 Good: > CTR
+        - 🔴 Poor: < CTR
+        """)
+    with leg3:
+        st.markdown("""
+        **NTB (New to Brand):**
+        - 🟢 Good: > 60%
+        - 🟡 Average: 40% - 60%
+        - 🔴 Poor: < 40%
+        """)
+    with leg4:
+        st.markdown("""
+        **ROAS:**
+        - 🟢 Good: > 2
+        - 🟡 Average: 1 - 2
+        - 🔴 Poor: < 1
+        """)
 
     st.markdown("---")
 
@@ -731,10 +656,12 @@ else:
     | 🔴 Not Spending | Zero spend or line items not running |
 
     ---
-    ## 💡 Budget Extraction
-    If budget is missing, extracted from the **last number** in order name:
-    - `"...4.5L...38K"` → ₹38,000 (takes last number)
-    - `"...1L"` → ₹1,00,000
-    - `"...2.1L"` → ₹2,10,000
+    ## 📈 Performance Thresholds
+    | Metric | Good | Average | Poor |
+    |--------|------|---------|------|
+    | CTR | > 0.6% | 0.4-0.6% | < 0.4% |
+    | DPVR | > CTR | - | < CTR |
+    | NTB | > 60% | 40-60% | < 40% |
+    | ROAS | > 2 | 1-2 | < 1 |
     """)
     st.info("👈 Upload your file in the sidebar to begin!")
