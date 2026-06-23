@@ -143,7 +143,6 @@ def process_entity_order_summary(df, today):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # Ensure NTB column exists
     if 'NTB' not in df.columns:
         df['NTB'] = 0
 
@@ -193,7 +192,7 @@ def process_entity_order_summary(df, today):
 
 
 # ═══════════════════════════════════════════════════════════════
-# COLOR HELPERS
+# STYLING FUNCTIONS (using apply instead of applymap)
 # ═══════════════════════════════════════════════════════════════
 STATUS_ICONS = {
     'On Track': '🟢',
@@ -206,64 +205,63 @@ STATUS_ICONS = {
 }
 
 
-def ctr_color(val):
-    """CTR: Good >0.006 (0.6%), Average 0.004-0.006, Poor <0.004"""
-    if val > 0.006:
-        return 'background-color: #c8e6c9; color: #2e7d32'
-    elif val >= 0.004:
-        return 'background-color: #fff9c4; color: #f57f17'
-    else:
-        return 'background-color: #ffcdd2; color: #c62828'
+def color_ctr(val):
+    """CTR: Good >0.006, Average 0.004-0.006, Poor <0.004"""
+    try:
+        v = float(val)
+        if v > 0.006:
+            return 'background-color: #c8e6c9; color: #2e7d32'
+        elif v >= 0.004:
+            return 'background-color: #fff9c4; color: #f57f17'
+        else:
+            return 'background-color: #ffcdd2; color: #c62828'
+    except:
+        return ''
 
 
-def dpvr_color(val, ctr_val):
-    """DPVR: Good if > CTR, Poor if < CTR"""
-    if val > ctr_val:
-        return 'background-color: #c8e6c9; color: #2e7d32'
-    else:
-        return 'background-color: #ffcdd2; color: #c62828'
+def color_ntb(val):
+    """NTB: Good >0.6, Average 0.4-0.6, Poor <0.4"""
+    try:
+        v = float(val)
+        if v > 0.6:
+            return 'background-color: #c8e6c9; color: #2e7d32'
+        elif v >= 0.4:
+            return 'background-color: #fff9c4; color: #f57f17'
+        else:
+            return 'background-color: #ffcdd2; color: #c62828'
+    except:
+        return ''
 
 
-def ntb_color(val):
-    """NTB: Good >60% (0.6), Poor <60%"""
-    if val > 0.6:
-        return 'background-color: #c8e6c9; color: #2e7d32'
-    elif val >= 0.4:
-        return 'background-color: #fff9c4; color: #f57f17'
-    else:
-        return 'background-color: #ffcdd2; color: #c62828'
-
-
-def roas_color(val):
+def color_roas(val):
     """ROAS: Good >2, Average 1-2, Poor <1"""
-    if val > 2:
-        return 'background-color: #c8e6c9; color: #2e7d32'
-    elif val >= 1:
-        return 'background-color: #fff9c4; color: #f57f17'
-    else:
-        return 'background-color: #ffcdd2; color: #c62828'
+    try:
+        v = float(val)
+        if v > 2:
+            return 'background-color: #c8e6c9; color: #2e7d32'
+        elif v >= 1:
+            return 'background-color: #fff9c4; color: #f57f17'
+        else:
+            return 'background-color: #ffcdd2; color: #c62828'
+    except:
+        return ''
 
 
-def style_performance_table(styler, df_source):
-    """Apply color coding to performance metrics table"""
-    styler = styler.applymap(ctr_color, subset=['CTR'])
-    styler = styler.applymap(ntb_color, subset=['NTB'])
-    styler = styler.applymap(roas_color, subset=['ROAS'])
-
-    # DPVR color based on comparison with CTR
-    def dpvr_style(col):
-        styles = []
-        for idx in col.index:
-            dpvr_val = col[idx]
-            ctr_val = df_source.loc[idx, 'CTR'] if idx in df_source.index else 0
-            if dpvr_val > ctr_val:
-                styles.append('background-color: #c8e6c9; color: #2e7d32')
-            else:
-                styles.append('background-color: #ffcdd2; color: #c62828')
-        return styles
-
-    styler = styler.apply(dpvr_style, subset=['DPVR'])
-    return styler
+def color_dpvr_vs_ctr(row):
+    """DPVR should be > CTR"""
+    styles = [''] * len(row)
+    try:
+        dpvr_idx = row.index.get_loc('DPVR')
+        ctr_idx = row.index.get_loc('CTR')
+        dpvr_val = float(row['DPVR'])
+        ctr_val = float(row['CTR'])
+        if dpvr_val > ctr_val:
+            styles[dpvr_idx] = 'background-color: #c8e6c9; color: #2e7d32'
+        else:
+            styles[dpvr_idx] = 'background-color: #ffcdd2; color: #c62828'
+    except:
+        pass
+    return styles
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -295,7 +293,6 @@ if uploaded_file is not None:
     line_not_running = len(df[df['Order Status'] == 'Line items not running'])
     inactive_combined = inactive_count + line_not_running
 
-    # Pacing counts (active/delivering only)
     status_counts = active_df['Status'].value_counts()
     on_track_count = status_counts.get('On Track', 0)
     under_count = status_counts.get('Under-delivering', 0)
@@ -307,20 +304,17 @@ if uploaded_file is not None:
     total_ideal = active_df[active_df['Budget'] > 0]['Ideal Spend'].sum()
     current_dr = (total_spend / total_ideal * 100) if total_ideal > 0 else 0
 
-    # Budget at risk = budget of orders pacing < 80%
-    at_risk_orders = active_df[(active_df['Pacing %'] < 80) & (active_df['Budget'] > 0)]
-    budget_at_risk = at_risk_orders['Remaining Budget'].sum()
+    # Budget at risk
+    at_risk = active_df[(active_df['Pacing %'] < 80) & (active_df['Budget'] > 0)]
+    budget_at_risk = at_risk['Remaining Budget'].sum()
 
-    # Unique accounts
+    # Account level counts
     total_accounts = df['Account Short'].nunique()
     active_accounts = active_df['Account Short'].nunique()
-
-    # Account-level pacing for summary
     acct_df = active_df[active_df['Budget'] > 0].copy()
+
     if len(acct_df) > 0:
-        acct_agg = acct_df.groupby('Account Short').agg({
-            'Budget': 'sum', 'Total Spend': 'sum', 'Ideal Spend': 'sum'
-        }).reset_index()
+        acct_agg = acct_df.groupby('Account Short').agg({'Budget': 'sum', 'Total Spend': 'sum', 'Ideal Spend': 'sum'}).reset_index()
         acct_agg['Pacing %'] = np.where(acct_agg['Ideal Spend'] > 0, (acct_agg['Total Spend'] / acct_agg['Ideal Spend']) * 100, 0)
         acct_under = len(acct_agg[acct_agg['Pacing %'] < under_threshold])
         acct_over = len(acct_agg[acct_agg['Pacing %'] > over_threshold])
@@ -366,7 +360,7 @@ if uploaded_file is not None:
     st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════
-    # ACCOUNT-LEVEL OVERVIEW (TABLE ONLY)
+    # ACCOUNT-LEVEL OVERVIEW (TABLE ONLY - NO CHART)
     # ═══════════════════════════════════════════════════════════
     st.header("🏢 Account-Level Overview")
 
@@ -391,8 +385,7 @@ if uploaded_file is not None:
         account_summary['Expected DR %'] = round((account_summary['Avg Elapsed'] / account_summary['Avg Total Days']) * 100, 1)
         account_summary['Pacing %'] = np.where(
             account_summary['Ideal Spend'] > 0,
-            round((account_summary['Spends'] / account_summary['Ideal Spend']) * 100, 1),
-            0
+            round((account_summary['Spends'] / account_summary['Ideal Spend']) * 100, 1), 0
         )
 
         def acct_status(row):
@@ -487,9 +480,8 @@ if uploaded_file is not None:
     # PERFORMANCE METRICS (COLOR CODED TABLE)
     # ═══════════════════════════════════════════════════════════
     st.header("📈 Performance Metrics")
-    st.caption("Color coding: 🟢 Good | 🟡 Average | 🔴 Poor")
+    st.caption("🟢 Good | 🟡 Average | 🔴 Poor")
 
-    # Account selector for drilling into orders
     perf_view = st.radio("View by:", ["Account Level", "Order Level"], horizontal=True)
 
     if perf_view == "Account Level":
@@ -506,8 +498,8 @@ if uploaded_file is not None:
             perf_agg.columns = ['Account', 'CTR', 'DPVR', 'NTB', 'ROAS', 'Spend', 'Orders']
             perf_agg = perf_agg.sort_values('Spend', ascending=False).reset_index(drop=True)
 
-            # Style the table
-            styled = perf_agg[['Account', 'CTR', 'DPVR', 'NTB', 'ROAS', 'Spend', 'Orders']].style.format({
+            # Apply styling using apply (row-wise for DPVR) and column-wise for others
+            styled = perf_agg.style.format({
                 'CTR': '{:.4f}',
                 'DPVR': '{:.4f}',
                 'NTB': '{:.2%}',
@@ -515,29 +507,18 @@ if uploaded_file is not None:
                 'Spend': '₹{:,.0f}'
             })
 
-            # Apply color coding
-            styled = styled.applymap(ctr_color, subset=['CTR'])
-            styled = styled.applymap(roas_color, subset=['ROAS'])
-            styled = styled.applymap(ntb_color, subset=['NTB'])
-
-            # DPVR vs CTR comparison
-            def dpvr_vs_ctr(s):
-                styles = []
-                for idx in s.index:
-                    dpvr_val = perf_agg.loc[idx, 'DPVR']
-                    ctr_val = perf_agg.loc[idx, 'CTR']
-                    if dpvr_val > ctr_val:
-                        styles.append('background-color: #c8e6c9; color: #2e7d32')
-                    else:
-                        styles.append('background-color: #ffcdd2; color: #c62828')
-                return styles
-
-            styled = styled.apply(dpvr_vs_ctr, subset=['DPVR'])
+            # Color CTR column
+            styled = styled.apply(lambda col: [color_ctr(v) for v in col], subset=['CTR'])
+            # Color NTB column
+            styled = styled.apply(lambda col: [color_ntb(v) for v in col], subset=['NTB'])
+            # Color ROAS column
+            styled = styled.apply(lambda col: [color_roas(v) for v in col], subset=['ROAS'])
+            # Color DPVR vs CTR (row-wise)
+            styled = styled.apply(color_dpvr_vs_ctr, axis=1)
 
             st.dataframe(styled, use_container_width=True, height=min(600, max(250, len(perf_agg) * 38)))
 
     else:
-        # Order level with account filter
         perf_acct_filter = st.selectbox("Select Account", options=["All"] + sorted(active_df['Account Short'].unique().tolist()))
 
         perf_orders = active_df[active_df['Budget'] > 0].copy()
@@ -563,22 +544,10 @@ if uploaded_file is not None:
                 'Spend': '₹{:,.0f}'
             })
 
-            styled_orders = styled_orders.applymap(ctr_color, subset=['CTR'])
-            styled_orders = styled_orders.applymap(roas_color, subset=['ROAS'])
-            styled_orders = styled_orders.applymap(ntb_color, subset=['NTB'])
-
-            def dpvr_vs_ctr_orders(s):
-                styles = []
-                for idx in s.index:
-                    dpvr_val = perf_order_display.loc[idx, 'DPVR']
-                    ctr_val = perf_order_display.loc[idx, 'CTR']
-                    if dpvr_val > ctr_val:
-                        styles.append('background-color: #c8e6c9; color: #2e7d32')
-                    else:
-                        styles.append('background-color: #ffcdd2; color: #c62828')
-                return styles
-
-            styled_orders = styled_orders.apply(dpvr_vs_ctr_orders, subset=['DPVR'])
+            styled_orders = styled_orders.apply(lambda col: [color_ctr(v) for v in col], subset=['CTR'])
+            styled_orders = styled_orders.apply(lambda col: [color_ntb(v) for v in col], subset=['NTB'])
+            styled_orders = styled_orders.apply(lambda col: [color_roas(v) for v in col], subset=['ROAS'])
+            styled_orders = styled_orders.apply(color_dpvr_vs_ctr, axis=1)
 
             st.dataframe(styled_orders, use_container_width=True, height=min(600, max(250, len(perf_order_display) * 38)))
 
@@ -586,32 +555,13 @@ if uploaded_file is not None:
     st.markdown("---")
     leg1, leg2, leg3, leg4 = st.columns(4)
     with leg1:
-        st.markdown("""
-        **CTR Thresholds:**
-        - 🟢 Good: > 0.6%
-        - 🟡 Average: 0.4% - 0.6%
-        - 🔴 Poor: < 0.4%
-        """)
+        st.markdown("**CTR**\n- 🟢 > 0.6%\n- 🟡 0.4-0.6%\n- 🔴 < 0.4%")
     with leg2:
-        st.markdown("""
-        **DPVR:**
-        - 🟢 Good: > CTR
-        - 🔴 Poor: < CTR
-        """)
+        st.markdown("**DPVR**\n- 🟢 > CTR\n- 🔴 < CTR")
     with leg3:
-        st.markdown("""
-        **NTB (New to Brand):**
-        - 🟢 Good: > 60%
-        - 🟡 Average: 40% - 60%
-        - 🔴 Poor: < 40%
-        """)
+        st.markdown("**NTB**\n- 🟢 > 60%\n- 🟡 40-60%\n- 🔴 < 40%")
     with leg4:
-        st.markdown("""
-        **ROAS:**
-        - 🟢 Good: > 2
-        - 🟡 Average: 1 - 2
-        - 🔴 Poor: < 1
-        """)
+        st.markdown("**ROAS**\n- 🟢 > 2\n- 🟡 1-2\n- 🔴 < 1")
 
     st.markdown("---")
 
@@ -644,7 +594,7 @@ else:
     ## 📁 How to Use
     1. Download **Entity Order Summary** from DSP Console
     2. Upload CSV/Excel in the sidebar ←
-    3. View delivery tracker with pacing & alerts
+    3. View delivery tracker with pacing & performance metrics
 
     ---
     ## 🚦 Status Definitions
@@ -657,8 +607,8 @@ else:
 
     ---
     ## 📈 Performance Thresholds
-    | Metric | Good | Average | Poor |
-    |--------|------|---------|------|
+    | Metric | 🟢 Good | 🟡 Average | 🔴 Poor |
+    |--------|---------|-----------|---------|
     | CTR | > 0.6% | 0.4-0.6% | < 0.4% |
     | DPVR | > CTR | - | < CTR |
     | NTB | > 60% | 40-60% | < 40% |
