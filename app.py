@@ -16,6 +16,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# FIXED CSS - only hide edit button, NOT sidebar
 st.markdown("""
 <style>
     .stMetric > div { background-color: #f8f9fa; border-radius: 8px; padding: 10px; }
@@ -23,9 +24,7 @@ st.markdown("""
     .block-container { padding-top: 1rem; }
     [data-testid="stToolbar"] { display: none !important; }
     .stDeployButton { display: none !important; }
-    #MainMenu { visibility: hidden; }
-    header { visibility: hidden; }
-    footer { visibility: hidden; }
+    footer { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -192,7 +191,7 @@ def process_entity_order_summary(df, today):
 
 
 # ═══════════════════════════════════════════════════════════════
-# STYLING FUNCTIONS (using apply instead of applymap)
+# PERFORMANCE COLOR CODING (using HTML for reliability)
 # ═══════════════════════════════════════════════════════════════
 STATUS_ICONS = {
     'On Track': '🟢',
@@ -205,63 +204,55 @@ STATUS_ICONS = {
 }
 
 
-def color_ctr(val):
-    """CTR: Good >0.006, Average 0.004-0.006, Poor <0.004"""
+def get_ctr_badge(val):
     try:
         v = float(val)
         if v > 0.006:
-            return 'background-color: #c8e6c9; color: #2e7d32'
+            return f'🟢 {v:.4f}'
         elif v >= 0.004:
-            return 'background-color: #fff9c4; color: #f57f17'
+            return f'🟡 {v:.4f}'
         else:
-            return 'background-color: #ffcdd2; color: #c62828'
+            return f'🔴 {v:.4f}'
     except:
-        return ''
+        return str(val)
 
 
-def color_ntb(val):
-    """NTB: Good >0.6, Average 0.4-0.6, Poor <0.4"""
+def get_dpvr_badge(dpvr_val, ctr_val):
+    try:
+        d = float(dpvr_val)
+        c = float(ctr_val)
+        if d > c:
+            return f'🟢 {d:.4f}'
+        else:
+            return f'🔴 {d:.4f}'
+    except:
+        return str(dpvr_val)
+
+
+def get_ntb_badge(val):
     try:
         v = float(val)
         if v > 0.6:
-            return 'background-color: #c8e6c9; color: #2e7d32'
+            return f'🟢 {v:.1%}'
         elif v >= 0.4:
-            return 'background-color: #fff9c4; color: #f57f17'
+            return f'🟡 {v:.1%}'
         else:
-            return 'background-color: #ffcdd2; color: #c62828'
+            return f'🔴 {v:.1%}'
     except:
-        return ''
+        return str(val)
 
 
-def color_roas(val):
-    """ROAS: Good >2, Average 1-2, Poor <1"""
+def get_roas_badge(val):
     try:
         v = float(val)
         if v > 2:
-            return 'background-color: #c8e6c9; color: #2e7d32'
+            return f'🟢 {v:.2f}'
         elif v >= 1:
-            return 'background-color: #fff9c4; color: #f57f17'
+            return f'🟡 {v:.2f}'
         else:
-            return 'background-color: #ffcdd2; color: #c62828'
+            return f'🔴 {v:.2f}'
     except:
-        return ''
-
-
-def color_dpvr_vs_ctr(row):
-    """DPVR should be > CTR"""
-    styles = [''] * len(row)
-    try:
-        dpvr_idx = row.index.get_loc('DPVR')
-        ctr_idx = row.index.get_loc('CTR')
-        dpvr_val = float(row['DPVR'])
-        ctr_val = float(row['CTR'])
-        if dpvr_val > ctr_val:
-            styles[dpvr_idx] = 'background-color: #c8e6c9; color: #2e7d32'
-        else:
-            styles[dpvr_idx] = 'background-color: #ffcdd2; color: #c62828'
-    except:
-        pass
-    return styles
+        return str(val)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -280,7 +271,6 @@ if uploaded_file is not None:
         st.error("No data processed. Check file format.")
         st.stop()
 
-    # Filter
     if show_only_delivering:
         active_df = df[df['Order Status'] == 'Delivering'].copy()
     else:
@@ -304,11 +294,9 @@ if uploaded_file is not None:
     total_ideal = active_df[active_df['Budget'] > 0]['Ideal Spend'].sum()
     current_dr = (total_spend / total_ideal * 100) if total_ideal > 0 else 0
 
-    # Budget at risk
     at_risk = active_df[(active_df['Pacing %'] < 80) & (active_df['Budget'] > 0)]
     budget_at_risk = at_risk['Remaining Budget'].sum()
 
-    # Account level counts
     total_accounts = df['Account Short'].nunique()
     active_accounts = active_df['Account Short'].nunique()
     acct_df = active_df[active_df['Budget'] > 0].copy()
@@ -360,7 +348,7 @@ if uploaded_file is not None:
     st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════
-    # ACCOUNT-LEVEL OVERVIEW (TABLE ONLY - NO CHART)
+    # ACCOUNT-LEVEL OVERVIEW (TABLE ONLY)
     # ═══════════════════════════════════════════════════════════
     st.header("🏢 Account-Level Overview")
 
@@ -477,7 +465,7 @@ if uploaded_file is not None:
     st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════
-    # PERFORMANCE METRICS (COLOR CODED TABLE)
+    # PERFORMANCE METRICS (EMOJI BADGES - NO applymap needed)
     # ═══════════════════════════════════════════════════════════
     st.header("📈 Performance Metrics")
     st.caption("🟢 Good | 🟡 Average | 🔴 Poor")
@@ -498,25 +486,18 @@ if uploaded_file is not None:
             perf_agg.columns = ['Account', 'CTR', 'DPVR', 'NTB', 'ROAS', 'Spend', 'Orders']
             perf_agg = perf_agg.sort_values('Spend', ascending=False).reset_index(drop=True)
 
-            # Apply styling using apply (row-wise for DPVR) and column-wise for others
-            styled = perf_agg.style.format({
-                'CTR': '{:.4f}',
-                'DPVR': '{:.4f}',
-                'NTB': '{:.2%}',
-                'ROAS': '{:.2f}',
-                'Spend': '₹{:,.0f}'
+            # Create color-coded display using emoji badges
+            perf_display = pd.DataFrame({
+                'Account': perf_agg['Account'],
+                'CTR': [get_ctr_badge(v) for v in perf_agg['CTR']],
+                'DPVR': [get_dpvr_badge(d, c) for d, c in zip(perf_agg['DPVR'], perf_agg['CTR'])],
+                'NTB': [get_ntb_badge(v) for v in perf_agg['NTB']],
+                'ROAS': [get_roas_badge(v) for v in perf_agg['ROAS']],
+                'Spend': [f"₹{v:,.0f}" for v in perf_agg['Spend']],
+                'Orders': perf_agg['Orders']
             })
 
-            # Color CTR column
-            styled = styled.apply(lambda col: [color_ctr(v) for v in col], subset=['CTR'])
-            # Color NTB column
-            styled = styled.apply(lambda col: [color_ntb(v) for v in col], subset=['NTB'])
-            # Color ROAS column
-            styled = styled.apply(lambda col: [color_roas(v) for v in col], subset=['ROAS'])
-            # Color DPVR vs CTR (row-wise)
-            styled = styled.apply(color_dpvr_vs_ctr, axis=1)
-
-            st.dataframe(styled, use_container_width=True, height=min(600, max(250, len(perf_agg) * 38)))
+            st.dataframe(perf_display, use_container_width=True, height=min(600, max(250, len(perf_display) * 38)))
 
     else:
         perf_acct_filter = st.selectbox("Select Account", options=["All"] + sorted(active_df['Account Short'].unique().tolist()))
@@ -528,28 +509,15 @@ if uploaded_file is not None:
         if len(perf_orders) > 0:
             perf_order_display = pd.DataFrame({
                 'Account': perf_orders['Account Short'].values,
-                'Order Name': perf_orders['Order Name'].str[:60].values,
-                'CTR': perf_orders['CTR'].values,
-                'DPVR': perf_orders['DPVR'].values,
-                'NTB': perf_orders['NTB'].values,
-                'ROAS': perf_orders['ROAS'].values,
-                'Spend': perf_orders['Total Spend'].values
-            }).reset_index(drop=True)
-
-            styled_orders = perf_order_display.style.format({
-                'CTR': '{:.4f}',
-                'DPVR': '{:.4f}',
-                'NTB': '{:.2%}',
-                'ROAS': '{:.2f}',
-                'Spend': '₹{:,.0f}'
+                'Order Name': perf_orders['Order Name'].str[:55].values,
+                'CTR': [get_ctr_badge(v) for v in perf_orders['CTR'].values],
+                'DPVR': [get_dpvr_badge(d, c) for d, c in zip(perf_orders['DPVR'].values, perf_orders['CTR'].values)],
+                'NTB': [get_ntb_badge(v) for v in perf_orders['NTB'].values],
+                'ROAS': [get_roas_badge(v) for v in perf_orders['ROAS'].values],
+                'Spend': [f"₹{v:,.0f}" for v in perf_orders['Total Spend'].values]
             })
 
-            styled_orders = styled_orders.apply(lambda col: [color_ctr(v) for v in col], subset=['CTR'])
-            styled_orders = styled_orders.apply(lambda col: [color_ntb(v) for v in col], subset=['NTB'])
-            styled_orders = styled_orders.apply(lambda col: [color_roas(v) for v in col], subset=['ROAS'])
-            styled_orders = styled_orders.apply(color_dpvr_vs_ctr, axis=1)
-
-            st.dataframe(styled_orders, use_container_width=True, height=min(600, max(250, len(perf_order_display) * 38)))
+            st.dataframe(perf_order_display, use_container_width=True, height=min(600, max(250, len(perf_order_display) * 38)))
 
     # Legend
     st.markdown("---")
