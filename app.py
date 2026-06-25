@@ -15,11 +15,11 @@ with st.sidebar:
     report_name = st.text_input("Name this report", value="", placeholder="e.g. June Week 3 Report")
     st.markdown("---")
     st.subheader("📁 Upload Files")
-    uploaded_file = st.file_uploader("1️⃣ Overall Data (Full YTD-MTD)", type=['csv', 'xlsx', 'xls'])
-    uploaded_3day = st.file_uploader("2️⃣ Last 3 Days Data (for DRR)", type=['csv', 'xlsx', 'xls'])
+    uploaded_file = st.file_uploader("1️⃣ Overall Data (Full YTD-MTD)", type=['csv','xlsx','xls'])
+    uploaded_3day = st.file_uploader("2️⃣ Last 3 Days Data (for DRR)", type=['csv','xlsx','xls'])
     st.markdown("---")
     st.subheader("📅 Projection")
-    projection_date = st.date_input("Projection Date", datetime(2026, 6, 30))
+    projection_date = st.date_input("Projection Date", datetime(2026,6,30))
     st.markdown("---")
     st.subheader("⚙️ Pacing Thresholds")
     under_threshold = st.slider("Under-delivering below (%)", 80, 100, 98)
@@ -36,8 +36,8 @@ def extract_budget_from_name(order_name):
         value = float(match.group(1))
         unit = match.group(2).upper()
         pos = match.start()
-        if unit == 'L': all_matches.append((pos, value * 100000))
-        elif unit == 'K': all_matches.append((pos, value * 1000))
+        if unit == 'L': all_matches.append((pos, value*100000))
+        elif unit == 'K': all_matches.append((pos, value*1000))
     if all_matches:
         all_matches.sort(key=lambda x: x[0])
         return all_matches[-1][1]
@@ -68,9 +68,7 @@ def standardize_columns(df):
         elif 'total purchases' in cl: m = 'Purchases'
         elif 'ecpm' in cl: m = 'eCPM'
         elif 'new-to-brand' in cl or 'ntb' in cl: m = 'NTB'
-        if m and m not in used:
-            col_map[col] = m
-            used.add(m)
+        if m and m not in used: col_map[col] = m; used.add(m)
     df = df.rename(columns=col_map)
     return df.loc[:, ~df.columns.duplicated(keep='first')]
 
@@ -89,13 +87,13 @@ def process_data(df, today, drr_data=None, proj_date=None):
         if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     if 'NTB' not in df.columns: df['NTB'] = 0
     df['Budget'] = df.apply(lambda r: extract_budget_from_name(r['Order Name']) if r.get('Budget',0)==0 else r['Budget'], axis=1)
-    df['Total Days'] = (df['End Date'] - df['Start Date']).dt.days + 1
-    df['Elapsed Days'] = ((today - df['Start Date']).dt.days + 1).clip(lower=0)
+    df['Total Days'] = (df['End Date']-df['Start Date']).dt.days + 1
+    df['Elapsed Days'] = ((today-df['Start Date']).dt.days+1).clip(lower=0)
     df['Elapsed Days'] = df[['Elapsed Days','Total Days']].min(axis=1)
-    df['Remaining Days'] = (df['Total Days'] - df['Elapsed Days']).clip(lower=0)
+    df['Remaining Days'] = (df['Total Days']-df['Elapsed Days']).clip(lower=0)
     df['Daily Budget'] = np.where(df['Total Days']>0, df['Budget']/df['Total Days'], 0)
-    df['Ideal Spend'] = df['Daily Budget'] * df['Elapsed Days']
-    df['Remaining Budget'] = (df['Budget'] - df['Total Spend']).clip(lower=0)
+    df['Ideal Spend'] = df['Daily Budget']*df['Elapsed Days']
+    df['Remaining Budget'] = (df['Budget']-df['Total Spend']).clip(lower=0)
     df['DR %'] = np.where(df['Budget']>0, round((df['Total Spend']/df['Budget'])*100,1), 0)
     df['Expected DR %'] = np.where(df['Total Days']>0, round((df['Elapsed Days']/df['Total Days'])*100,1), 0)
     df['Pacing %'] = np.where(df['Ideal Spend']>0, round((df['Total Spend']/df['Ideal Spend'])*100,1), 0)
@@ -115,12 +113,15 @@ def process_data(df, today, drr_data=None, proj_date=None):
             df['Current DRR'] = df['Current DRR'].fillna(0)
     else:
         df['Current DRR'] = np.where(df['Elapsed Days']>0, df['Total Spend']/df['Elapsed Days'], 0)
+    # Projected Spend: use Current DRR if available, else use Daily Budget
     df['Projected Spend'] = df['Total Spend']
     if proj_date is not None:
         proj_ts = pd.Timestamp(proj_date)
         if proj_ts > today:
             days_proj = (proj_ts - today).days
-            df['Projected Spend'] = df['Total Spend'] + (df['Current DRR'] * days_proj)
+            # Use Current DRR if > 0, otherwise use Daily Budget as fallback
+            effective_drr = np.where(df['Current DRR'] > 0, df['Current DRR'], df['Daily Budget'])
+            df['Projected Spend'] = df['Total Spend'] + (effective_drr * days_proj)
             df['Projected Spend'] = df[['Projected Spend','Budget']].min(axis=1)
     def assign_status(row):
         if row.get('Order Status','') == 'Ended': return 'Ended'
@@ -133,9 +134,8 @@ def process_data(df, today, drr_data=None, proj_date=None):
         else: return 'On Track'
     df['Status'] = df.apply(assign_status, axis=1)
     df['Account Short'] = df['Account'].str.replace('IN - GCS - CEPC - ', '', regex=False).str.strip()
-    # CTR and DPVR as percentage
-    df['CTR %'] = df['CTR'] * 100
-    df['DPVR %'] = df['DPVR'] * 100
+    df['CTR %'] = df['CTR']*100
+    df['DPVR %'] = df['DPVR']*100
     return df
 
 STATUS_ICONS = {'On Track':'🟢','Under-delivering':'🟡','Over-delivering':'🔵','Not Spending':'🔴','No Budget':'⚪','Inactive':'⚪','Ended':'⏹️'}
@@ -183,7 +183,7 @@ if uploaded_file is not None:
     else:
         active_df = df[~df['Status'].isin(['Ended','Inactive'])].copy()
 
-    # Active orders for date range (delivering + inactive + lines not running)
+    # Flight dates
     active_for_dates = df[df['Order Status'].isin(['Delivering','Inactive','Line items not running'])]
     flight_start = active_for_dates['Start Date'].min()
     flight_end = active_for_dates['End Date'].max()
@@ -193,66 +193,57 @@ if uploaded_file is not None:
     ended_count = len(df[df['Order Status']=='Ended'])
     line_not_running = len(df[df['Order Status']=='Line items not running'])
     inactive_combined = inactive_count + line_not_running
-    status_counts = active_df['Status'].value_counts()
-    total_budget = active_df[active_df['Budget']>0]['Budget'].sum()
-    total_spend = active_df['Total Spend'].sum()
-    total_ideal = active_df[active_df['Budget']>0]['Ideal Spend'].sum()
-    current_dr = (total_spend/total_ideal*100) if total_ideal>0 else 0
-    at_risk = active_df[(active_df['Pacing %']<80)&(active_df['Budget']>0)]
-    budget_at_risk = at_risk['Remaining Budget'].sum()
     total_accounts = df['Account Short'].nunique()
     active_accounts = active_df['Account Short'].nunique()
     ended_accounts = df[df['Order Status']=='Ended']['Account Short'].nunique()
-    acct_df = active_df[active_df['Budget']>0].copy()
-
-    if len(acct_df) > 0:
-        acct_agg = acct_df.groupby('Account Short').agg({'Budget':'sum','Total Spend':'sum','Ideal Spend':'sum'}).reset_index()
-        acct_agg['Pacing %'] = np.where(acct_agg['Ideal Spend']>0,(acct_agg['Total Spend']/acct_agg['Ideal Spend'])*100,0)
-        acct_under = len(acct_agg[acct_agg['Pacing %']<under_threshold])
-        acct_over = len(acct_agg[acct_agg['Pacing %']>over_threshold])
-        acct_on_track = len(acct_agg) - acct_under - acct_over
-    else:
-        acct_under = acct_over = acct_on_track = 0
 
     proj_ts = pd.Timestamp(projection_date)
     today_ts = pd.Timestamp(TODAY)
     show_projection = proj_ts > today_ts
-    proj_total_spend = active_df['Projected Spend'].sum() if show_projection else 0
 
     # HEADER
     title = "📊 DSP Delivery Tracker"
     if report_name: title += f" — {report_name}"
     st.title(title)
-    date_str = f"📅 {TODAY.strftime('%d %B %Y')} | Flight: {flight_start.strftime('%d %b %Y') if pd.notna(flight_start) else 'N/A'} → {flight_end.strftime('%d %b %Y') if pd.notna(flight_end) else 'N/A'} | Orders: {len(df)}"
-    st.caption(date_str)
+    st.caption(f"📅 {TODAY.strftime('%d %B %Y')} | Flight: {flight_start.strftime('%d %b %Y') if pd.notna(flight_start) else 'N/A'} → {flight_end.strftime('%d %b %Y') if pd.notna(flight_end) else 'N/A'} | Orders: {len(df)}")
     if uploaded_3day: st.success("✅ 3-Day DRR file loaded")
     else: st.info("ℹ️ Upload 'Last 3 Days Data' for accurate Current DRR")
     st.markdown("---")
 
-    # ACCOUNT LEVEL SUMMARY
+    # ACCOUNT LEVEL SUMMARY WITH FILTER
     st.subheader("🏢 Account Level Summary")
-    acct_summary_filter = st.multiselect("Filter Accounts", options=sorted(active_df['Account Short'].unique()), default=[], key="acct_sum_filter")
-    summary_acct_df = active_df.copy()
+    acct_summary_filter = st.multiselect("Select Accounts (leave empty for all)", options=sorted(active_df['Account Short'].unique()), default=[], key="acct_sum")
+    summary_df = active_df.copy()
     if acct_summary_filter:
-        summary_acct_df = summary_acct_df[summary_acct_df['Account Short'].isin(acct_summary_filter)]
-    sum_budget = summary_acct_df[summary_acct_df['Budget']>0]['Budget'].sum()
-    sum_spend = summary_acct_df['Total Spend'].sum()
-    sum_ideal = summary_acct_df[summary_acct_df['Budget']>0]['Ideal Spend'].sum()
+        summary_df = summary_df[summary_df['Account Short'].isin(acct_summary_filter)]
+    sum_budget = summary_df[summary_df['Budget']>0]['Budget'].sum()
+    sum_spend = summary_df['Total Spend'].sum()
+    sum_ideal = summary_df[summary_df['Budget']>0]['Ideal Spend'].sum()
     sum_dr = (sum_spend/sum_ideal*100) if sum_ideal>0 else 0
+    # Account pacing counts
+    sum_acct = summary_df[summary_df['Budget']>0].groupby('Account Short').agg({'Budget':'sum','Total Spend':'sum','Ideal Spend':'sum'}).reset_index()
+    sum_acct['Pacing %'] = np.where(sum_acct['Ideal Spend']>0,(sum_acct['Total Spend']/sum_acct['Ideal Spend'])*100,0)
+    s_under = len(sum_acct[sum_acct['Pacing %']<under_threshold])
+    s_over = len(sum_acct[sum_acct['Pacing %']>over_threshold])
+    s_on_track = len(sum_acct) - s_under - s_over
 
     a1,a2,a3,a4,a5,a6,a7,a8 = st.columns(8)
-    a1.metric("Total Accounts", total_accounts if not acct_summary_filter else len(acct_summary_filter))
-    a2.metric("Active Accounts", active_accounts if not acct_summary_filter else len(acct_summary_filter))
+    a1.metric("Total Accounts", total_accounts)
+    a2.metric("Active Accounts", len(sum_acct))
     a3.metric("⏹️ Ended", ended_accounts)
-    a4.metric("🟡 Under-delivery", acct_under)
-    a5.metric("🔵 Over-delivery", acct_over)
-    a6.metric("🟢 On Track", acct_on_track)
+    a4.metric("🟡 Under-delivery", s_under)
+    a5.metric("🔵 Over-delivery", s_over)
+    a6.metric("🟢 On Track", s_on_track)
     a7.metric("💰 Budget", f"₹{sum_budget/100000:.1f}L")
     a8.metric("📊 Current DR%", f"{sum_dr:.1f}%")
     st.markdown("---")
 
     # ORDER LEVEL SUMMARY
     st.subheader("📋 Order Level Summary")
+    status_counts = active_df['Status'].value_counts()
+    total_budget = active_df[active_df['Budget']>0]['Budget'].sum()
+    at_risk = active_df[(active_df['Pacing %']<80)&(active_df['Budget']>0)]
+    budget_at_risk = at_risk['Remaining Budget'].sum()
     o1,o2,o3,o4,o5,o6,o7,o8 = st.columns(8)
     o1.metric("Total Orders", len(df))
     o2.metric("🟢 Active", delivering_count)
@@ -265,44 +256,56 @@ if uploaded_file is not None:
 
     if show_projection:
         st.markdown("---")
+        proj_total = active_df['Projected Spend'].sum()
         st.subheader(f"🔮 Projection (by {projection_date.strftime('%d %b %Y')})")
         pr1,pr2,pr3 = st.columns(3)
         pr1.metric("📅 Days to Projection", f"{(proj_ts-today_ts).days} days")
-        pr2.metric("💸 Projected Total Spend", f"₹{proj_total_spend/100000:.1f}L")
-        pr3.metric("📉 Projected Remaining", f"₹{(total_budget-proj_total_spend)/100000:.1f}L")
+        pr2.metric("💸 Projected Total Spend", f"₹{proj_total/100000:.1f}L")
+        pr3.metric("📉 Projected Remaining", f"₹{(total_budget-proj_total)/100000:.1f}L")
     st.markdown("---")
 
     # ACCOUNT OVERVIEW TABLE
     st.header("🏢 Account-Level Overview")
+    acct_df = active_df[active_df['Budget']>0].copy()
     if len(acct_df) > 0:
-        account_summary = acct_df.groupby('Account Short').agg({'Budget':'sum','Total Spend':'sum','Ideal Spend':'sum','Elapsed Days':'mean','Total Days':'mean','Current DRR':'sum','Expected DRR':'sum','Projected Spend':'sum','CTR %':'mean','DPVR %':'mean','ROAS':'mean','Order Name':'count'}).reset_index()
-        account_summary.columns = ['Account','Budget','Spends','Ideal Spend','Avg Elapsed','Avg Total Days','Current DRR','Expected DRR','Projected Spend','CTR %','DPVR %','ROAS','Orders']
+        account_summary = acct_df.groupby('Account Short').agg({
+            'Budget':'sum','Total Spend':'sum','Ideal Spend':'sum',
+            'Elapsed Days':'mean','Total Days':'mean',
+            'Current DRR':'sum','Expected DRR':'sum','Projected Spend':'sum',
+            'Start Date':'min','End Date':'max',
+            'CTR %':'mean','DPVR %':'mean','ROAS':'mean',
+            'Order Name':'count'
+        }).reset_index()
+        account_summary.columns = ['Account','Budget','Spends','Ideal Spend','Avg Elapsed','Avg Total Days','Current DRR','Expected DRR','Projected Spend','Start Date','End Date','CTR %','DPVR %','ROAS','Orders']
         account_summary['DR %'] = round((account_summary['Spends']/account_summary['Budget'])*100,1)
         account_summary['Expected DR %'] = round((account_summary['Avg Elapsed']/account_summary['Avg Total Days'])*100,1)
         account_summary['Pacing %'] = np.where(account_summary['Ideal Spend']>0, round((account_summary['Spends']/account_summary['Ideal Spend'])*100,1),0)
         account_summary['Status'] = account_summary.apply(lambda r: 'Under-delivering' if r['Pacing %']<under_threshold else ('Over-delivering' if r['Pacing %']>over_threshold else 'On Track'), axis=1)
         account_summary = account_summary.sort_values('Pacing %', ascending=True)
+        # Format dates
+        account_summary['Start Date'] = account_summary['Start Date'].dt.strftime('%d %b %Y')
+        account_summary['End Date'] = account_summary['End Date'].dt.strftime('%d %b %Y')
         st.caption(f"{len(account_summary)} Accounts")
-        disp_cols = ['Account','Budget','Spends','DR %','Expected DR %','Pacing %','Current DRR','Expected DRR']
+        disp_cols = ['Account','Start Date','End Date','Budget','Spends','DR %','Expected DR %','Pacing %','Current DRR','Expected DRR']
         if show_projection: disp_cols.append('Projected Spend')
         disp_cols += ['CTR %','DPVR %','ROAS','Orders','Status']
         acct_display = account_summary[disp_cols].copy()
         acct_display['Status'] = acct_display['Status'].map(lambda x: f"{STATUS_ICONS.get(x,'')} {x}")
         fmt = {'Budget':'₹{:,.0f}','Spends':'₹{:,.0f}','DR %':'{:.1f}%','Expected DR %':'{:.1f}%','Pacing %':'{:.1f}%','Current DRR':'₹{:,.0f}','Expected DRR':'₹{:,.0f}','CTR %':'{:.2f}%','DPVR %':'{:.2f}%','ROAS':'{:.2f}'}
         if show_projection: fmt['Projected Spend'] = '₹{:,.0f}'
-        st.dataframe(acct_display.style.format(fmt), use_container_width=True, height=min(600,max(250,len(account_summary)*38)))
+        st.dataframe(acct_display.style.format(fmt), use_container_width=True, height=min(650,max(250,len(account_summary)*38)))
     st.markdown("---")
 
     # ORDER-LEVEL TABLE
     st.header("📋 Order-Level Delivery Tracker")
     fc1,fc2,fc3 = st.columns([2,2,1])
-    with fc1: acct_filter = st.multiselect("Filter by Account", options=sorted(active_df['Account Short'].unique()), default=[], key="order_acct")
+    with fc1: acct_filter = st.multiselect("Filter by Account", options=sorted(active_df['Account Short'].unique()), default=[], key="ord_acct")
     with fc2: status_filter = st.multiselect("Filter by Status", options=active_df['Status'].unique().tolist(), default=active_df['Status'].unique().tolist())
     with fc3: pacing_range = st.slider("Pacing %", 0, 200, (0,200))
     filtered_df = active_df.copy()
     if acct_filter: filtered_df = filtered_df[filtered_df['Account Short'].isin(acct_filter)]
     filtered_df = filtered_df[(filtered_df['Status'].isin(status_filter))&(filtered_df['Pacing %'].between(pacing_range[0],pacing_range[1]))]
-    od = {'Account':filtered_df['Account Short'].values,'Order Name':filtered_df['Order Name'].values,'Budget':filtered_df['Budget'].values,'Spends':filtered_df['Total Spend'].values,'DR %':filtered_df['DR %'].values,'Expected DR %':filtered_df['Expected DR %'].values,'Pacing %':filtered_df['Pacing %'].values,'Current DRR':filtered_df['Current DRR'].values,'Expected DRR':filtered_df['Expected DRR'].values}
+    od = {'Account':filtered_df['Account Short'].values,'Order Name':filtered_df['Order Name'].values,'Start Date':filtered_df['Start Date'].dt.strftime('%d %b %Y').values,'End Date':filtered_df['End Date'].dt.strftime('%d %b %Y').values,'Budget':filtered_df['Budget'].values,'Spends':filtered_df['Total Spend'].values,'DR %':filtered_df['DR %'].values,'Expected DR %':filtered_df['Expected DR %'].values,'Pacing %':filtered_df['Pacing %'].values,'Current DRR':filtered_df['Current DRR'].values,'Expected DRR':filtered_df['Expected DRR'].values}
     if show_projection: od['Projected Spend'] = filtered_df['Projected Spend'].values
     od['CTR %'] = filtered_df['CTR %'].values
     od['DPVR %'] = filtered_df['DPVR %'].values
@@ -324,8 +327,8 @@ if uploaded_file is not None:
             pa = ps.groupby('Account Short').agg({'CTR %':'mean','DPVR %':'mean','NTB':'mean','ROAS':'mean','Total Spend':'sum','Order Name':'count'}).reset_index()
             pa.columns = ['Account','CTR %','DPVR %','NTB','ROAS','Spend','Orders']
             pa = pa.sort_values('Spend', ascending=False)
-            pd_display = pd.DataFrame({'Account':pa['Account'].values,'CTR':[badge_ctr(v) for v in pa['CTR %'].values],'DPVR':[badge_dpvr(d,c) for d,c in zip(pa['DPVR %'].values,pa['CTR %'].values)],'NTB':[badge_ntb(v) for v in pa['NTB'].values],'ROAS':[badge_roas(v) for v in pa['ROAS'].values],'Spend':[f"₹{v:,.0f}" for v in pa['Spend'].values],'Orders':pa['Orders'].values})
-            st.dataframe(pd_display, use_container_width=True, height=min(600,max(250,len(pd_display)*38)))
+            pd_disp = pd.DataFrame({'Account':pa['Account'].values,'CTR':[badge_ctr(v) for v in pa['CTR %'].values],'DPVR':[badge_dpvr(d,c) for d,c in zip(pa['DPVR %'].values,pa['CTR %'].values)],'NTB':[badge_ntb(v) for v in pa['NTB'].values],'ROAS':[badge_roas(v) for v in pa['ROAS'].values],'Spend':[f"₹{v:,.0f}" for v in pa['Spend'].values],'Orders':pa['Orders'].values})
+            st.dataframe(pd_disp, use_container_width=True, height=min(600,max(250,len(pd_disp)*38)))
     else:
         pa2 = st.selectbox("Select Account", options=["All"]+sorted(active_df['Account Short'].unique().tolist()))
         po = active_df[active_df['Budget']>0].copy()
@@ -364,17 +367,17 @@ else:
 3. View delivery tracker with pacing, projections & performance
 
 ---
-
-## 📊 DRR Explained
+## 📊 DRR & Projection Explained
 
 | Metric | Formula |
 |--------|---------|
 | **Current DRR** | Last 3 days spend ÷ 3 (from File 2) |
 | **Expected DRR** | Remaining Budget ÷ Remaining Days |
-| **Projected Spend** | Current Spend + (Current DRR × Days to Projection Date) |
+| **Projected Spend** | Current Spend + (Current DRR × Days to Projection) |
+
+💡 If Current DRR = 0 (new order, no spend yet), projection uses Daily Budget as fallback.
 
 ---
-
 ## 🚦 Status Definitions
 
 | Status | Condition |
@@ -385,7 +388,6 @@ else:
 | 🔴 Not Spending | Zero spend or line items not running |
 
 ---
-
 ## 📈 Performance Thresholds
 
 | Metric | 🟢 Good | 🟡 Average | 🔴 Poor |
@@ -394,13 +396,5 @@ else:
 | DPVR | > CTR | - | < CTR |
 | NTB | > 60% | 40-60% | < 40% |
 | ROAS | > 2 | 1-2 | < 1 |
-
----
-
-## 💡 Budget Extraction
-
-If budget is missing, extracted from the **last number** in order name:
-- `"...4.5L...38K"` → ₹38,000 (takes last number)
-- `"...1L"` → ₹1,00,000
     """)
     st.info("👈 Upload your file in the **sidebar** to begin!")
