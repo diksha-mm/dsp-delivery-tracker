@@ -8,7 +8,7 @@ import re
 # PAGE CONFIG
 # ═══════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="CEPC DSP Delivery Tracker",
+    page_title="DSP Delivery Tracker",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -27,14 +27,20 @@ st.markdown("""
 # ═══════════════════════════════════════════════════════════════
 with st.sidebar:
     st.title("📊 DSP Delivery Tracker")
-    st.caption("CEPC Team Dashboard")
+    st.caption("Team Dashboard")
+    st.markdown("---")
+
+    # Report Name
+    st.subheader("📝 Report Name")
+    report_name = st.text_input("Name this report", value="", placeholder="e.g. June Week 3 Report")
+
     st.markdown("---")
 
     st.subheader("📁 Upload Files")
     uploaded_file = st.file_uploader(
-        "1️⃣ Overall Entity Order Summary",
+        "1️⃣ Overall Data (Full YTD-MTD)",
         type=['csv', 'xlsx', 'xls'],
-        help="Full YTD Entity Order Summary from DSP Console"
+        help="Full YTD-MTD Entity Order Summary from DSP Console"
     )
 
     uploaded_3day = st.file_uploader(
@@ -44,8 +50,7 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.subheader("📅 Settings")
-    report_date = st.date_input("Report Date", datetime(2026, 6, 23))
+    st.subheader("📅 Projection")
     projection_date = st.date_input("Projection Date (Future)", datetime(2026, 6, 30), help="Select future date to see projected spend")
 
     st.markdown("---")
@@ -61,6 +66,9 @@ with st.sidebar:
 # ═══════════════════════════════════════════════════════════════
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════
+
+# Use today's date automatically
+TODAY = datetime.today()
 
 def extract_budget_from_name(order_name):
     if pd.isna(order_name):
@@ -194,10 +202,9 @@ def process_data(df, today, drr_data=None, proj_date=None):
                 df.drop('Current DRR_old', axis=1, inplace=True)
             df['Current DRR'] = df['Current DRR'].fillna(0)
     else:
-        # Fallback: estimate from total spend / elapsed days
         df['Current DRR'] = np.where(df['Elapsed Days'] > 0, df['Total Spend'] / df['Elapsed Days'], 0)
 
-    # Projected Spend (if projection date is in future)
+    # Projected Spend
     df['Projected Spend'] = df['Total Spend']
     df['Projected DR %'] = df['DR %']
     if proj_date is not None:
@@ -205,12 +212,8 @@ def process_data(df, today, drr_data=None, proj_date=None):
         if proj_ts > today:
             days_to_project = (proj_ts - today).days
             df['Projected Spend'] = df['Total Spend'] + (df['Current DRR'] * days_to_project)
-            # Cap at budget
             df['Projected Spend'] = df[['Projected Spend', 'Budget']].min(axis=1)
             df['Projected DR %'] = np.where(df['Budget'] > 0, round((df['Projected Spend'] / df['Budget']) * 100, 1), 0)
-
-    # DRR Gap
-    df['DRR Gap'] = df['Current DRR'] - df['Expected DRR']
 
     # Status
     def assign_status(row):
@@ -284,12 +287,11 @@ def badge_roas(val):
 if uploaded_file is not None:
     raw_df = parse_file(uploaded_file)
 
-    # Parse 3-day file if uploaded
     drr_raw = None
     if uploaded_3day is not None:
         drr_raw = parse_file(uploaded_3day)
 
-    df = process_data(raw_df, report_date, drr_data=drr_raw, proj_date=projection_date)
+    df = process_data(raw_df, TODAY, drr_data=drr_raw, proj_date=projection_date)
 
     if len(df) == 0:
         st.error("No data processed. Check file format.")
@@ -300,7 +302,7 @@ if uploaded_file is not None:
     else:
         active_df = df[~df['Status'].isin(['Ended', 'Inactive'])].copy()
 
-    # ═══ COUNTS ═══
+    # Counts
     delivering_count = len(df[df['Order Status'] == 'Delivering'])
     inactive_count = len(df[df['Order Status'] == 'Inactive'])
     ended_count = len(df[df['Order Status'] == 'Ended'])
@@ -330,22 +332,25 @@ if uploaded_file is not None:
     else:
         acct_under = acct_over = acct_on_track = 0
 
-    # Projection info
+    # Projection
     proj_ts = pd.Timestamp(projection_date)
-    today_ts = pd.Timestamp(report_date)
+    today_ts = pd.Timestamp(TODAY)
     show_projection = proj_ts > today_ts
     proj_total_spend = active_df['Projected Spend'].sum() if show_projection else 0
 
     # ═══════════════════════════════════════════════════════════
     # HEADER
     # ═══════════════════════════════════════════════════════════
-    st.title("📊 CEPC DSP Delivery Tracker")
-    st.caption(f"📅 {report_date.strftime('%d %B %Y')} | Total Orders: {len(df)}")
+    title_text = "📊 DSP Delivery Tracker"
+    if report_name:
+        title_text += f" — {report_name}"
+    st.title(title_text)
+    st.caption(f"📅 {TODAY.strftime('%d %B %Y')} | Total Orders: {len(df)}")
 
     if uploaded_3day is not None:
-        st.success("✅ 3-Day DRR file loaded — Current DRR calculated from actual last 3 days spend")
+        st.success("✅ 3-Day DRR file loaded — Current DRR from actual last 3 days")
     else:
-        st.info("ℹ️ Upload 'Last 3 Days Data' in sidebar for accurate Current DRR. Currently using estimated DRR.")
+        st.info("ℹ️ Upload 'Last 3 Days Data' for accurate Current DRR. Using estimated DRR.")
 
     st.markdown("---")
 
@@ -356,7 +361,7 @@ if uploaded_file is not None:
     a1, a2, a3, a4, a5, a6, a7, a8 = st.columns(8)
     a1.metric("Total Accounts", total_accounts)
     a2.metric("Active Accounts", active_accounts)
-    a3.metric("⏹️ Ended Accounts", ended_accounts)
+    a3.metric("⏹️ Ended", ended_accounts)
     a4.metric("🟡 Under-delivery", acct_under)
     a5.metric("🔵 Over-delivery", acct_over)
     a6.metric("🟢 On Track", acct_on_track)
@@ -400,8 +405,7 @@ if uploaded_file is not None:
         account_summary = acct_df.groupby('Account Short').agg({
             'Budget': 'sum', 'Total Spend': 'sum', 'Ideal Spend': 'sum',
             'Elapsed Days': 'mean', 'Total Days': 'mean',
-            'Current DRR': 'sum', 'Expected DRR': 'sum',
-            'Projected Spend': 'sum',
+            'Current DRR': 'sum', 'Expected DRR': 'sum', 'Projected Spend': 'sum',
             'CTR': 'mean', 'DPVR': 'mean', 'ROAS': 'mean',
             'Order Name': 'count'
         }).reset_index()
@@ -430,7 +434,6 @@ if uploaded_file is not None:
 
         st.caption(f"{len(account_summary)} Accounts")
 
-        # Build display columns
         disp_cols = ['Account', 'Budget', 'Spends', 'DR %', 'Expected DR %', 'Pacing %', 'Current DRR', 'Expected DRR']
         if show_projection:
             disp_cols.append('Proj DR %')
@@ -448,11 +451,8 @@ if uploaded_file is not None:
         if show_projection:
             fmt_dict['Proj DR %'] = '{:.1f}%'
 
-        st.dataframe(
-            acct_display.style.format(fmt_dict),
-            use_container_width=True,
-            height=min(600, max(250, len(account_summary) * 38))
-        )
+        st.dataframe(acct_display.style.format(fmt_dict), use_container_width=True,
+                     height=min(600, max(250, len(account_summary) * 38)))
 
     st.markdown("---")
 
@@ -477,7 +477,6 @@ if uploaded_file is not None:
         (filtered_df['Pacing %'].between(pacing_range[0], pacing_range[1]))
     ]
 
-    # Build order display
     order_data = {
         'Account': filtered_df['Account Short'].values,
         'Order Name': filtered_df['Order Name'].values,
@@ -510,10 +509,7 @@ if uploaded_file is not None:
         order_fmt['Projected Spend'] = '₹{:,.0f}'
         order_fmt['Proj DR %'] = '{:.1f}%'
 
-    st.dataframe(
-        order_display.style.format(order_fmt),
-        use_container_width=True, height=600
-    )
+    st.dataframe(order_display.style.format(order_fmt), use_container_width=True, height=600)
 
     st.markdown("---")
 
@@ -567,60 +563,3 @@ if uploaded_file is not None:
     l1, l2, l3, l4 = st.columns(4)
     l1.markdown("**CTR**\n- 🟢 > 0.6%\n- 🟡 0.4-0.6%\n- 🔴 < 0.4%")
     l2.markdown("**DPVR**\n- 🟢 > CTR\n- 🔴 < CTR")
-    l3.markdown("**NTB**\n- 🟢 > 60%\n- 🟡 40-60%\n- 🔴 < 40%")
-    l4.markdown("**ROAS**\n- 🟢 > 2\n- 🟡 1-2\n- 🔴 < 1")
-
-    st.markdown("---")
-
-    # ═══════════════════════════════════════════════════════════
-    # DOWNLOAD
-    # ═══════════════════════════════════════════════════════════
-    st.header("📥 Download")
-    dl1, dl2 = st.columns(2)
-    with dl1:
-        st.download_button("⬇️ Order Tracker (CSV)", active_df.to_csv(index=False),
-                           f"order_tracker_{report_date.strftime('%Y%m%d')}.csv", "text/csv")
-    with dl2:
-        if len(acct_df) > 0:
-            st.download_button("⬇️ Account Summary (CSV)", account_summary.to_csv(index=False),
-                               f"account_summary_{report_date.strftime('%Y%m%d')}.csv", "text/csv")
-
-else:
-    st.title("📊 CEPC DSP Delivery Tracker")
-    st.markdown("### Upload your Entity Order Summary to get started")
-    st.markdown("---")
-    st.info("👈 Upload your files in the **sidebar** to begin! Click the **>** arrow at top-left if sidebar is hidden.")
-    st.markdown("""
-    ## 📁 How to Use
-
-    **File 1 (Required):** Entity Order Summary — Full YTD data
-
-    **File 2 (Optional):** Last 3 Days data — Same format, filtered to last 3 days for accurate DRR
-
-    ---
-    ## 📊 DRR Explained
-
-    | Metric | Formula |
-    |--------|---------|
-    | **Current DRR** | Last 3 days spend ÷ 3 (from File 2) |
-    | **Expected DRR** | Remaining Budget ÷ Remaining Days |
-    | **Projected Spend** | Current Spend + (Current DRR × Days to Projection Date) |
-
-    ---
-    ## 🚦 Status Definitions
-    | Status | Condition |
-    |--------|-----------|
-    | 🟢 On Track | 98% ≤ Pacing ≤ 105% |
-    | 🟡 Under-delivering | Pacing < 98% |
-    | 🔵 Over-delivering | Pacing > 105% |
-    | 🔴 Not Spending | Zero spend or line items not running |
-
-    ---
-    ## 📈 Performance Thresholds
-    | Metric | 🟢 Good | 🟡 Average | 🔴 Poor |
-    |--------|---------|-----------|---------|
-    | CTR | > 0.6% | 0.4-0.6% | < 0.4% |
-    | DPVR | > CTR | - | < CTR |
-    | NTB | > 60% | 40-60% | < 40% |
-    | ROAS | > 2 | 1-2 | < 1 |
-    """)
