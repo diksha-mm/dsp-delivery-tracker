@@ -6,7 +6,7 @@ import re
 from io import BytesIO
 
 st.set_page_config(page_title="DSP Delivery Tracker", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
-st.markdown("""<style>.stDeployButton{display:none!important}.stMetric>div{background-color:#f8f9fa;border-radius:8px;padding:10px}div[data-testid="stMetricValue"]{font-size:22px}</style>""", unsafe_allow_html=True)
+st.markdown('<style>.stDeployButton{display:none!important}.stMetric>div{background-color:#f8f9fa;border-radius:8px;padding:10px}div[data-testid="stMetricValue"]{font-size:22px}</style>', unsafe_allow_html=True)
 TODAY = datetime.today()
 CURRENT_MONTH = TODAY.month
 CURRENT_YEAR = TODAY.year
@@ -142,33 +142,31 @@ STATUS_ICONS = {'On Track':'🟢','Under-delivering':'🟡','Over-delivering':'�
 def badge_ctr(v):
     try:
         v=float(v)
-        if v>0.60:return f'🟢 {v:.2f}%'
-        elif v>=0.40:return f'🟡 {v:.2f}%'
-        else:return f'🔴 {v:.2f}%'
+        if v>0.60:return '🟢 '+str(round(v,2))+'%'
+        elif v>=0.40:return '🟡 '+str(round(v,2))+'%'
+        else:return '🔴 '+str(round(v,2))+'%'
     except:return str(v)
 def badge_dpvr(d,c):
     try:
         d,c=float(d),float(c)
-        if d>c:return f'🟢 {d:.2f}%'
-        else:return f'🔴 {d:.2f}%'
+        if d>c:return '🟢 '+str(round(d,2))+'%'
+        else:return '🔴 '+str(round(d,2))+'%'
     except:return str(d)
 def badge_ntb(v):
     try:
         v=float(v)
-        if v>0.6:return f'🟢 {v:.1%}'
-        elif v>=0.4:return f'🟡 {v:.1%}'
-        else:return f'🔴 {v:.1%}'
+        if v>0.6:return '🟢 '+str(round(v*100,1))+'%'
+        elif v>=0.4:return '🟡 '+str(round(v*100,1))+'%'
+        else:return '🔴 '+str(round(v*100,1))+'%'
     except:return str(v)
 def badge_roas(v):
     try:
         v=float(v)
-        if v>2:return f'🟢 {v:.2f}'
-        elif v>=1:return f'🟡 {v:.2f}'
-        else:return f'🔴 {v:.2f}'
+        if v>2:return '🟢 '+str(round(v,2))
+        elif v>=1:return '🟡 '+str(round(v,2))
+        else:return '🔴 '+str(round(v,2))
     except:return str(v)
 
-# ═══════════════════════════════════════════════════════════════
-# DASHBOARD EXPORT FUNCTIONS
-# ═══════════════════════════════════════════════════════════════
-def generate_html_report(title, acct_summary_df, order_df, perf_df, summary_metrics):
-    html = f"""
+def generate_html_report(title, acct_df, order_df, perf_df, metrics):
+    css = '<style>body{font-family:Arial,sans-serif;margin:20px}h1{color:#232f3e;border-bottom:3px solid #ff9900;padding-bottom:10px}h2{color:#232f3e;margin-top:30px}.metrics{display:flex;gap:15px;flex-wrap:wrap;margin:15px 0}.mb{background:#f8f9fa;border-radius:8px;padding:15px 20px;min-width:120px;text-align:center}.mb .v{font-size:24px;font-weight:bold}.mb .l{font-size:12px;color:#666}table{border-collapse:collapse;width:100%;margin:15px 0;font-size:11px}th{background:#232f3e;color:white;padding:8px}td{padding:6px 8px;border-bottom:1px solid #eee}tr:nth-child(even){background:#f9f9f9}</style>'
+    html = '
