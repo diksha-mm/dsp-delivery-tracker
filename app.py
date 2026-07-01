@@ -18,8 +18,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 TODAY = datetime.today()
-CURRENT_MONTH = TODAY.month
-CURRENT_YEAR = TODAY.year
 
 with st.sidebar:
     st.title("📊 DSP Delivery Tracker")
@@ -42,6 +40,9 @@ with st.sidebar:
     )
     st.markdown("---")
     st.subheader("📅 Projection")
+    show_projection = st.checkbox(
+        "Show Projected Spend", value=True
+    )
     projection_date = st.date_input(
         "Projection Date",
         datetime(2026, 6, 30)
@@ -55,8 +56,9 @@ with st.sidebar:
         "Over above (%)", 100, 120, 105
     )
     st.markdown("---")
-    show_only_delivering = st.checkbox(
-        "Show only Delivering", value=True
+    show_only_del = st.checkbox(
+        "Show only Delivering (Order table)",
+        value=True
     )
 
 
@@ -245,9 +247,9 @@ def process(df, today, drr_data=None, proj_date=None):
     )
     df['Projected Spend'] = df['Total Spend']
     if proj_date is not None:
-        pts = pd.Timestamp(proj_date)
-        if pts > today:
-            dp = (pts - today).days
+        p = pd.Timestamp(proj_date)
+        if p > today:
+            dp = (p - today).days
             df['Projected Spend'] = (
                 df['Total Spend'] + edrr * dp
             )
@@ -376,25 +378,28 @@ def make_excel(acct_df, order_df, perf_df, info):
 
 if uploaded_file is not None:
     raw = parse_file(uploaded_file)
-    drr = parse_file(uploaded_3day) if uploaded_3day else None
-    df = process(raw, TODAY, drr_data=drr, proj_date=projection_date)
+    drr = None
+    if uploaded_3day:
+        drr = parse_file(uploaded_3day)
+    df = process(
+        raw, TODAY, drr_data=drr,
+        proj_date=projection_date
+    )
     if len(df) == 0:
         st.error("No data.")
         st.stop()
-    if show_only_delivering:
-        adf = df[df['Order Status'] == 'Delivering'].copy()
+
+    # Order table uses filter
+    if show_only_del:
+        adf = df[
+            df['Order Status'] == 'Delivering'
+        ].copy()
     else:
-        adf = df[~df['Status'].isin(
-            ['Ended', 'Inactive']
-        )].copy()
-    acm = df[
-        (df['Start Date'] <= pd.Timestamp(
-            CURRENT_YEAR, CURRENT_MONTH, 28
-        ))
-        & (df['End Date'] >= pd.Timestamp(
-            CURRENT_YEAR, CURRENT_MONTH, 1
-        ))
-    ].copy()
+        adf = df.copy()
+
+    # Account overview uses ALL data from file
+    all_df = df.copy()
+
     afd = df[df['Order Status'].isin(
         ['Delivering', 'Inactive',
          'Line items not running']
@@ -406,24 +411,28 @@ if uploaded_file is not None:
     ic = (
         len(df[df['Order Status'] == 'Inactive'])
         + len(df[
-            df['Order Status'] == 'Line items not running'
+            df['Order Status']
+            == 'Line items not running'
         ])
     )
     ta = df['Account Short'].nunique()
-    aa = adf['Account Short'].nunique()
     ea = df[
         df['Order Status'] == 'Ended'
     ]['Account Short'].nunique()
     pts = pd.Timestamp(projection_date)
     tts = pd.Timestamp(TODAY)
-    sp = pts > tts
+    sp = show_projection and (pts > tts)
 
     title = "📊 DSP Delivery Tracker"
     if report_name:
         title += " - " + report_name
     st.title(title)
-    fss = fs.strftime('%d %b %Y') if pd.notna(fs) else ''
-    fes = fe.strftime('%d %b %Y') if pd.notna(fe) else ''
+    fss = ''
+    if pd.notna(fs):
+        fss = fs.strftime('%d %b %Y')
+    fes = ''
+    if pd.notna(fe):
+        fes = fe.strftime('%d %b %Y')
     st.caption(
         TODAY.strftime('%d %B %Y')
         + " | Flight: " + fss + " to " + fes
@@ -439,10 +448,10 @@ if uploaded_file is not None:
     st.subheader("🏢 Account Level Summary")
     asf = st.multiselect(
         "Select Accounts",
-        sorted(adf['Account Short'].unique()),
+        sorted(all_df['Account Short'].unique()),
         default=[], key="as1"
     )
-    sd = adf.copy()
+    sd = all_df.copy()
     if asf:
         sd = sd[sd['Account Short'].isin(asf)]
     sb = sd[sd['Budget'] > 0]['Budget'].sum()
@@ -460,15 +469,18 @@ if uploaded_file is not None:
     )
     su = len(sag[sag['P'] < under_threshold])
     so = len(sag[sag['P'] > over_threshold])
-    sn = len(sag) - su - so
+    sn2 = len(sag) - su - so
     c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
     c1.metric("Total", ta)
     c2.metric("Active", len(sag))
     c3.metric("Ended", ea)
     c4.metric("🟡Under", su)
     c5.metric("🔵Over", so)
-    c6.metric("🟢OnTrack", sn)
-    c7.metric("Budget", "₹" + str(round(sb/100000, 1)) + "L")
+    c6.metric("🟢OnTrack", sn2)
+    c7.metric(
+        "Budget",
+        "₹" + str(round(sb/100000, 1)) + "L"
+    )
     c8.metric("DR%", str(round(sdr, 1)) + "%")
     st.markdown("---")
 
@@ -488,7 +500,10 @@ if uploaded_file is not None:
     d5.metric("🟢OnTrack", sc.get('On Track', 0))
     d6.metric("🟡Under", sc.get('Under-delivering', 0))
     d7.metric("🔵Over", sc.get('Over-delivering', 0))
-    d8.metric("⚠️Risk", "₹" + str(round(ar/100000, 1)) + "L")
+    d8.metric(
+        "⚠️Risk",
+        "₹" + str(round(ar/100000, 1)) + "L"
+    )
     if sp:
         st.markdown("---")
         pt = adf['Projected Spend'].sum()
@@ -508,10 +523,10 @@ if uploaded_file is not None:
         )
     st.markdown("---")
 
-    # ACCOUNT TABLE
+    # ACCOUNT TABLE - ALL ACCOUNTS
     st.header("🏢 Account-Level Overview")
-    st.caption("All orders in " + TODAY.strftime('%B %Y'))
-    aod = acm.copy()
+    st.caption("All accounts from uploaded file")
+    aod = all_df.copy()
     ad = pd.DataFrame()
     if len(aod) > 0:
         atf = st.multiselect(
@@ -539,7 +554,7 @@ if uploaded_file is not None:
         acs.columns = [
             'Account', 'Budget', 'Spends',
             'Ideal Spend', 'Current DRR',
-            'Expected DRR', 'Projected Spend',
+            'Expected DRR', 'Proj Spend',
             'Proj End', 'Start Date', 'End Date',
             'CTR %', 'DPVR %', 'ROAS', 'Orders'
         ]
@@ -575,9 +590,11 @@ if uploaded_file is not None:
             'Current DRR', 'Expected DRR'
         ]
         if sp:
-            cols.append('Projected Spend')
-        cols += ['CTR %', 'DPVR %', 'ROAS',
-                 'Orders', 'Status']
+            cols.append('Proj Spend')
+        cols += [
+            'CTR %', 'DPVR %', 'ROAS',
+            'Orders', 'Status'
+        ]
         ad = acs[cols].copy()
         ad['Status'] = ad['Status'].map(
             lambda x: ICONS.get(x, '') + " " + x
@@ -593,7 +610,7 @@ if uploaded_file is not None:
             'ROAS': '{:.2f}'
         }
         if sp:
-            fm['Projected Spend'] = '₹{:,.0f}'
+            fm['Proj Spend'] = '₹{:,.0f}'
         st.dataframe(
             ad.style.format(fm),
             use_container_width=True,
@@ -641,7 +658,9 @@ if uploaded_file is not None:
         'Exp DRR': fd['Expected DRR'].values,
     }
     if sp:
-        odata['Proj Spend'] = fd['Projected Spend'].values
+        odata['Proj Spend'] = (
+            fd['Projected Spend'].values
+        )
     odata['CTR %'] = fd['CTR %'].values
     odata['DPVR %'] = fd['DPVR %'].values
     odata['ROAS'] = fd['ROAS'].values
@@ -672,7 +691,10 @@ if uploaded_file is not None:
     # PERFORMANCE
     st.header("📈 Performance")
     st.caption("🟢Good 🟡Average 🔴Poor")
-    pv = st.radio("View:", ["Account", "Order"], horizontal=True)
+    pv = st.radio(
+        "View:", ["Account", "Order"],
+        horizontal=True
+    )
     pdf = pd.DataFrame()
     if pv == "Account":
         ps = adf[adf['Budget'] > 0]
@@ -715,14 +737,18 @@ if uploaded_file is not None:
         if len(po) > 0:
             pdf = pd.DataFrame({
                 'Account': po['Account Short'].values,
-                'Order': po['Order Name'].str[:50].values,
+                'Order': po[
+                    'Order Name'
+                ].str[:50].values,
                 'CTR': [b_ctr(v) for v in po['CTR %']],
                 'DPVR': [
                     b_dpvr(d, c) for d, c
                     in zip(po['DPVR %'], po['CTR %'])
                 ],
                 'NTB': [b_ntb(v) for v in po['NTB']],
-                'ROAS': [b_roas(v) for v in po['ROAS']],
+                'ROAS': [
+                    b_roas(v) for v in po['ROAS']
+                ],
             })
             st.dataframe(pdf, use_container_width=True)
     st.markdown("---")
@@ -742,9 +768,8 @@ if uploaded_file is not None:
         }
         xl = make_excel(ad, odf, pdf, info)
         st.download_button(
-            "📊 Download Excel Report",
-            xl,
-            nm + ".xlsx",
+            "📊 Download Excel",
+            xl, nm + ".xlsx",
             "application/vnd.openxmlformats-"
             "officedocument.spreadsheetml.sheet"
         )
@@ -752,8 +777,7 @@ if uploaded_file is not None:
         st.download_button(
             "📄 Download CSV",
             adf.to_csv(index=False),
-            nm + ".csv",
-            "text/csv"
+            nm + ".csv", "text/csv"
         )
 
 else:
@@ -761,8 +785,7 @@ else:
     st.markdown("### Upload Entity Order Summary")
     st.markdown("---")
     st.markdown(
-        "**File 1:** Entity Order Summary "
-        "(Full YTD-MTD)\n\n"
+        "**File 1:** Overall Data (Full YTD-MTD)\n\n"
         "**File 2:** Last 3 Days (for DRR)"
     )
     st.markdown("---")
@@ -774,4 +797,4 @@ else:
         "| 🔵 Over | Proj end > 105% |\n"
         "| 🔴 Not Spending | Zero 3+ days |"
     )
-    st.info("Upload file in sidebar to begin!")
+    st.info("Upload file in sidebar!")
